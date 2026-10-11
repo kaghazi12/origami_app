@@ -229,3 +229,100 @@ export function createPreliminaryBasePattern(size: number = 1): FoldFormat {
     ],
   };
 }
+
+/**
+ * Classical Miura-ori periodic origami tessellation pattern
+ * Periodic parallelogram tessellation with negative Poisson's ratio (auxetic collapse).
+ * Satisfies Kawasaki's and Maekawa's theorems at every interior vertex.
+ */
+export function createMiuraOriPattern(
+  cols: number = 3,
+  rows: number = 3,
+  width: number = 1,
+  height: number = 1,
+  skewRatio: number = 0.2
+): FoldFormat {
+  const dx = width / cols;
+  const dy = height / rows;
+  const deltaY = dy * skewRatio;
+
+  const vertices_coords: [number, number][] = [];
+  const vLookup = (c: number, r: number) => r * (cols + 1) + c;
+
+  for (let r = 0; r <= rows; r++) {
+    for (let c = 0; c <= cols; c++) {
+      const x = c * dx;
+      const yShift = c % 2 === 1 ? deltaY : 0;
+      const y = r * dy + yShift;
+      vertices_coords.push([x, y]);
+    }
+  }
+
+  const edges_vertices: [number, number][] = [];
+  const edges_assignment: any[] = [];
+  const edges_foldAngle: number[] = [];
+
+  // Horizontal zigzag edges: between (c, r) and (c+1, r)
+  for (let r = 0; r <= rows; r++) {
+    const isBoundaryRow = r === 0 || r === rows;
+    for (let c = 0; c < cols; c++) {
+      const u = vLookup(c, r);
+      const v = vLookup(c + 1, r);
+      edges_vertices.push([u, v]);
+
+      if (isBoundaryRow) {
+        edges_assignment.push('B');
+        edges_foldAngle.push(0);
+      } else {
+        const isMountain = (c + r) % 2 === 0;
+        edges_assignment.push(isMountain ? 'M' : 'V');
+        edges_foldAngle.push(isMountain ? -90 : 90);
+      }
+    }
+  }
+
+  // Vertical straight edges: between (c, r) and (c, r+1)
+  for (let c = 0; c <= cols; c++) {
+    const isBoundaryCol = c === 0 || c === cols;
+    for (let r = 0; r < rows; r++) {
+      const u = vLookup(c, r);
+      const v = vLookup(c, r + 1);
+      edges_vertices.push([u, v]);
+
+      if (isBoundaryCol) {
+        edges_assignment.push('B');
+        edges_foldAngle.push(0);
+      } else {
+        const isMountain = c % 2 === 1;
+        edges_assignment.push(isMountain ? 'M' : 'V');
+        edges_foldAngle.push(isMountain ? -90 : 90);
+      }
+    }
+  }
+
+  // Faces: each quad [v(c, r), v(c+1, r), v(c+1, r+1), v(c, r+1)]
+  const faces_vertices: number[][] = [];
+  for (let r = 0; r < rows; r++) {
+    for (let c = 0; c < cols; c++) {
+      faces_vertices.push([
+        vLookup(c, r),
+        vLookup(c + 1, r),
+        vLookup(c + 1, r + 1),
+        vLookup(c, r + 1),
+      ]);
+    }
+  }
+
+  return {
+    file_spec: 1.1,
+    file_creator: 'origami-fold-engine',
+    file_title: `Miura-ori (${cols}x${rows})`,
+    file_classes: ['singleModel'],
+    frame_classes: ['creasePattern'],
+    vertices_coords,
+    edges_vertices,
+    edges_assignment,
+    edges_foldAngle,
+    faces_vertices,
+  };
+}

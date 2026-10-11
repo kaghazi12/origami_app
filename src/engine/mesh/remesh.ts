@@ -103,6 +103,123 @@ function isSubSegment(
 }
 
 /**
+ * Verifies whether a crease segment c1->c2 is completely covered by a contiguous
+ * union of mesh edges collinear with c1->c2.
+ */
+export function isCreaseCoveredByMeshEdges(
+  c1: [number, number],
+  c2: [number, number],
+  mesh: TriMesh,
+  eps = 1e-5
+): boolean {
+  const cdx = c2[0] - c1[0];
+  const cdy = c2[1] - c1[1];
+  const cLenSq = cdx * cdx + cdy * cdy;
+  if (cLenSq < eps * eps) return true;
+
+  const intervals: [number, number][] = [];
+
+  for (const bar of mesh.bars) {
+    const p1: [number, number] = [mesh.uvs[bar.v0 * 2], mesh.uvs[bar.v0 * 2 + 1]];
+    const p2: [number, number] = [mesh.uvs[bar.v1 * 2], mesh.uvs[bar.v1 * 2 + 1]];
+
+    if (isSubSegment(p1, p2, c1, c2, eps)) {
+      const t1 = ((p1[0] - c1[0]) * cdx + (p1[1] - c1[1]) * cdy) / cLenSq;
+      const t2 = ((p2[0] - c1[0]) * cdx + (p2[1] - c1[1]) * cdy) / cLenSq;
+      intervals.push([Math.min(t1, t2), Math.max(t1, t2)]);
+    }
+  }
+
+  if (intervals.length === 0) return false;
+
+  // Sort intervals by start
+  intervals.sort((a, b) => a[0] - b[0]);
+
+  // Merge intervals
+  let mergedStart = intervals[0][0];
+  let mergedEnd = intervals[0][1];
+
+  if (mergedStart > eps) return false;
+
+  for (let i = 1; i < intervals.length; i++) {
+    const [s, e] = intervals[i];
+    if (s <= mergedEnd + eps) {
+      if (e > mergedEnd) mergedEnd = e;
+    } else {
+      // Gap in coverage
+      return false;
+    }
+  }
+
+  return mergedEnd >= 1 - eps;
+}
+
+/**
+ * Checks whether a regular Cartesian grid of cell size ~targetEdgeLength can
+ * honor every crease segment in the FOLD model.
+ */
+export function canGridHonorCreases(
+  fold: FoldFormat,
+  targetEdgeLength: number,
+  eps = 1e-5
+): boolean {
+  let minX = Infinity;
+  let maxX = -Infinity;
+  let minY = Infinity;
+  let maxY = -Infinity;
+
+  for (const [x, y] of fold.vertices_coords) {
+    if (x < minX) minX = x;
+    if (x > maxX) maxX = x;
+    if (y < minY) minY = y;
+    if (y > maxY) maxY = y;
+  }
+
+  const width = maxX - minX || 1;
+  const height = maxY - minY || 1;
+
+  const nx = Math.max(1, Math.round(width / targetEdgeLength));
+  const ny = Math.max(1, Math.round(height / targetEdgeLength));
+
+  const dx = width / nx;
+  const dy = height / ny;
+
+  for (let eIdx = 0; eIdx < fold.edges_vertices.length; eIdx++) {
+    const a = fold.edges_assignment[eIdx];
+    if (a === 'B') continue;
+
+    const [u, v] = fold.edges_vertices[eIdx];
+    const p1 = fold.vertices_coords[u];
+    const p2 = fold.vertices_coords[v];
+
+    // Check if both endpoints lie on grid coordinates
+    const onGrid1X = Math.abs(p1[0] - (minX + Math.round((p1[0] - minX) / dx) * dx)) < eps;
+    const onGrid1Y = Math.abs(p1[1] - (minY + Math.round((p1[1] - minY) / dy) * dy)) < eps;
+    const onGrid2X = Math.abs(p2[0] - (minX + Math.round((p2[0] - minX) / dx) * dx)) < eps;
+    const onGrid2Y = Math.abs(p2[1] - (minY + Math.round((p2[1] - minY) / dy) * dy)) < eps;
+
+    if (!onGrid1X || !onGrid1Y || !onGrid2X || !onGrid2Y) {
+      return false;
+    }
+
+    // Check slope orientation: must be horizontal, vertical, or forward diagonal (slope = dy / dx)
+    const deltax = p2[0] - p1[0];
+    const deltay = p2[1] - p1[1];
+
+    const isHorizontal = Math.abs(deltay) < eps;
+    const isVertical = Math.abs(deltax) < eps;
+    const isForwardDiagonal = Math.abs(deltax / dx - deltay / dy) < eps;
+    const isBackwardDiagonal = Math.abs(deltax / dx + deltay / dy) < eps;
+
+    if (!isHorizontal && !isVertical && !isForwardDiagonal && !isBackwardDiagonal) {
+      return false;
+    }
+  }
+
+  return true;
+}
+
+/**
  * Creates a regularized quality triangulation of a rectangular paper sheet with targetEdgeLength,
  * strictly preserving all crease edges from the original FOLD model.
  */
@@ -211,12 +328,7 @@ export function createRegularTriangulation(
       const v11 = vertexLookup(i + 1, j + 1);
       const v01 = vertexLookup(i, j + 1);
 
-      // Triangle 1: [v00, v10, v11]
-      // Triangle 2: [v00, v11, v01]
-      triangles.push([v00, v10, v11]);
-      triangles.push([v00, v11, v01]);
-
-      // Add quad edges
+      // Add quad boundary edges
       const e00_10 = getEdgeProperties(v00, v10);
       addEdge(v00, v10, e00_10.assignment, e00_10.angle);
 
@@ -229,9 +341,22 @@ export function createRegularTriangulation(
       const e01_00 = getEdgeProperties(v01, v00);
       addEdge(v01, v00, e01_00.assignment, e01_00.angle);
 
-      // Diagonal edge v00 -> v11
-      const eDiag = getEdgeProperties(v00, v11);
-      addEdge(v00, v11, eDiag.assignment, eDiag.angle);
+      // Check if backward diagonal [v01, v10] lies on a crease
+      const eDiagBackward = getEdgeProperties(v01, v10);
+      const useBackward = eDiagBackward.assignment !== 'F';
+
+      if (useBackward) {
+        // Split along backward diagonal v01 -> v10
+        triangles.push([v00, v10, v01]);
+        triangles.push([v10, v11, v01]);
+        addEdge(v01, v10, eDiagBackward.assignment, eDiagBackward.angle);
+      } else {
+        // Split along forward diagonal v00 -> v11
+        triangles.push([v00, v10, v11]);
+        triangles.push([v00, v11, v01]);
+        const eDiag = getEdgeProperties(v00, v11);
+        addEdge(v00, v11, eDiag.assignment, eDiag.angle);
+      }
     }
   }
 

@@ -134,6 +134,7 @@ export function extractTopology(
         assignment,
         targetAngle: targetAngleRad,
         restAngle: 0, // Initial rest angle is 0 (flat)
+        previousAngle: 0,
         stiffness,
       });
     }

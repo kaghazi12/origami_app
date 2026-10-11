@@ -6,5 +6,6 @@ export {
   createDiagonalFoldPattern,
   createWaterbombBasePattern,
   createPreliminaryBasePattern,
+  createMiuraOriPattern,
 } from './templates';
 export { extractPlanarFaces, resolveTJunctions } from './faces';

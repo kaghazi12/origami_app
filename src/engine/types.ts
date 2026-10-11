@@ -64,6 +64,8 @@ export interface HingeElement {
   restAngle: number;
   /** Torsional stiffness (k_crease for M/V, k_facet for F) */
   stiffness: number;
+  /** Previous dihedral angle in radians for continuous unwrapping */
+  previousAngle?: number;
 }
 
 /**

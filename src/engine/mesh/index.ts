@@ -15,4 +15,10 @@ export {
   type MeshOptions,
 } from './mesh';
 export { splitMeshAlongPolyline, splitMeshAlongSegment, type SplitOptions } from './split';
-export { computeMeshQuality, createRegularTriangulation, type MeshQuality } from './remesh';
+export {
+  computeMeshQuality,
+  createRegularTriangulation,
+  canGridHonorCreases,
+  isCreaseCoveredByMeshEdges,
+  type MeshQuality,
+} from './remesh';

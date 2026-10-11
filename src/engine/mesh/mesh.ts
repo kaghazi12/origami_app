@@ -2,7 +2,7 @@ import { FoldFormat, TriMesh, SimulationState, RenderBuffers } from '../types';
 import { triangulatePolygon } from './triangulate';
 import { extractTopology, TopologyResult } from './topology';
 import { extractPlanarFaces } from '../fold/faces';
-import { createRegularTriangulation } from './remesh';
+import { createRegularTriangulation, canGridHonorCreases } from './remesh';
 
 export interface MeshOptions {
   axialStiffness?: number;
@@ -20,9 +20,12 @@ export interface MeshOptions {
 export function createMeshFromFold(fold: FoldFormat, options: MeshOptions = {}): TriMesh {
   let workingFold = fold;
 
-  // 1. If targetEdgeLength specified, produce quality regular triangulation
+  // 1. If targetEdgeLength specified, produce quality regular triangulation if grid honors all creases;
+  // otherwise, fall back to constrained triangulation preserving all creases (Requirement 7)
   if (options.targetEdgeLength && options.targetEdgeLength > 0) {
-    return createRegularTriangulation(fold, options.targetEdgeLength, options);
+    if (canGridHonorCreases(workingFold, options.targetEdgeLength)) {
+      return createRegularTriangulation(workingFold, options.targetEdgeLength, options);
+    }
   }
 
   // 2. If faces_vertices missing or empty, derive from planar edge graph

@@ -60,7 +60,14 @@ export function computeDihedralAngle(hinge: HingeElement, positions: Float64Arra
   // sinTheta = -(crossN . e_hat) so valley folds (lifted toward +z) yield positive theta
   const sinTheta = -(cnx * ex + cny * ey + cnz * ez) / eLen;
 
-  return Math.atan2(sinTheta, Math.max(-1, Math.min(1, cosTheta)));
+  const rawTheta = Math.atan2(sinTheta, Math.max(-1, Math.min(1, cosTheta)));
+  let theta = rawTheta;
+  if (hinge.previousAngle !== undefined) {
+    const k = Math.round((hinge.previousAngle - rawTheta) / (2 * Math.PI));
+    theta = rawTheta + k * 2 * Math.PI;
+  }
+  hinge.previousAngle = theta;
+  return theta;
 }
 
 /**
@@ -125,7 +132,13 @@ export function accumulateHingeForces(
     const cnz = n1x * n2y - n1y * n2x;
     const sinTheta = -(cnx * ex + cny * ey + cnz * ez) / (a1 * a2 * eLen);
 
-    const theta = Math.atan2(sinTheta, Math.max(-1, Math.min(1, cosTheta)));
+    const rawTheta = Math.atan2(sinTheta, Math.max(-1, Math.min(1, cosTheta)));
+    let theta = rawTheta;
+    if (hinge.previousAngle !== undefined) {
+      const k = Math.round((hinge.previousAngle - rawTheta) / (2 * Math.PI));
+      theta = rawTheta + k * 2 * Math.PI;
+    }
+    hinge.previousAngle = theta;
     const deltaTheta = theta - hinge.restAngle;
 
     totalEnergy += 0.5 * hinge.stiffness * deltaTheta * deltaTheta;
