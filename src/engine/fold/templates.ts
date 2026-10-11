@@ -132,8 +132,9 @@ export function createWaterbombBasePattern(size: number = 1): FoldFormat {
       [5, 6],
       [6, 7],
       [7, 0],
-      // Creases meeting at center:
-      // Horizontal mountain folds
+      // Orthogonal mountain folds (dual of Preliminary Base)
+      [1, 8],
+      [8, 5],
       [7, 8],
       [8, 3],
       // Diagonal valley folds
@@ -144,21 +145,23 @@ export function createWaterbombBasePattern(size: number = 1): FoldFormat {
     ],
     edges_assignment: [
       'B', 'B', 'B', 'B', 'B', 'B', 'B', 'B',
-      'M', 'M',
+      'M', 'M', 'M', 'M',
       'V', 'V', 'V', 'V',
     ],
     edges_foldAngle: [
       0, 0, 0, 0, 0, 0, 0, 0,
-      -180, -180,
+      -180, -180, -180, -180,
       180, 180, 180, 180,
     ],
     faces_vertices: [
-      [0, 1, 2, 8], // Bottom quad
-      [2, 3, 8],    // Right-bottom triangle
-      [3, 4, 8],    // Right-top triangle
-      [4, 5, 6, 8], // Top quad
-      [6, 7, 8],    // Left-top triangle
-      [7, 0, 8],    // Left-bottom triangle
+      [0, 1, 8],
+      [1, 2, 8],
+      [2, 3, 8],
+      [3, 4, 8],
+      [4, 5, 8],
+      [5, 6, 8],
+      [6, 7, 8],
+      [7, 0, 8],
     ],
   };
 }

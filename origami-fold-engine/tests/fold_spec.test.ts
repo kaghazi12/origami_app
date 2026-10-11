@@ -34,7 +34,7 @@ describe('Phase 1: FOLD 1.1 Specification Foundation', () => {
     const wb = parseFold(createWaterbombBasePattern(1));
     expect(wb.vertices_coords).toHaveLength(9);
     expect(wb.edges_assignment.filter((a) => a === 'B')).toHaveLength(8);
-    expect(wb.edges_assignment.filter((a) => a === 'M')).toHaveLength(2);
+    expect(wb.edges_assignment.filter((a) => a === 'M')).toHaveLength(4);
     expect(wb.edges_assignment.filter((a) => a === 'V')).toHaveLength(4);
 
     const pb = parseFold(createPreliminaryBasePattern(1));
