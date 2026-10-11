@@ -1,0 +1,5 @@
+node_modules/
+dist/
+origami-fold-engine/node_modules/
+.DS_Store
+*.log

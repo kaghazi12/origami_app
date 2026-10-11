@@ -1,0 +1,21 @@
+{
+  "version": 1,
+  "id": "quarter-square",
+  "name": "Quarter square",
+  "paper": { "width": 1, "height": 1 },
+  "steps": [
+    {
+      "title": "Fold the left half over the right half",
+      "crease": { "from": [0.5, 0], "to": [0.5, 1] },
+      "moving": "left",
+      "kind": "valley"
+    },
+    {
+      "title": "Fold the top half down over the bottom half",
+      "hint": "Both layers fold together.",
+      "crease": { "from": [0.5, 0.5], "to": [1, 0.5] },
+      "moving": "left",
+      "kind": "valley"
+    }
+  ]
+}
