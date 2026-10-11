@@ -92,14 +92,17 @@ export function createMeshFromFold(fold: FoldFormat, options: MeshOptions = {}):
 export function getSimulationState(mesh: TriMesh, stepCount: number = 0, time: number = 0): SimulationState {
   const numHinges = mesh.hinges.length;
   const restAngles = new Float64Array(numHinges);
+  const previousAngles = new Float64Array(numHinges);
   for (let i = 0; i < numHinges; i++) {
     restAngles[i] = mesh.hinges[i].restAngle;
+    previousAngles[i] = mesh.hinges[i].previousAngle ?? 0;
   }
 
   return {
     positions: new Float64Array(mesh.positions),
     velocities: new Float64Array(mesh.velocities),
     restAngles,
+    previousAngles,
     stepCount,
     time,
   };
@@ -113,6 +116,9 @@ export function setSimulationState(mesh: TriMesh, state: SimulationState): void 
   mesh.velocities.set(state.velocities);
   for (let i = 0; i < mesh.hinges.length && i < state.restAngles.length; i++) {
     mesh.hinges[i].restAngle = state.restAngles[i];
+    if (state.previousAngles && i < state.previousAngles.length) {
+      mesh.hinges[i].previousAngle = state.previousAngles[i];
+    }
   }
 }
 

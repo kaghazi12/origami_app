@@ -3,7 +3,11 @@ import { HingeElement } from '../types';
 /**
  * Computes the current dihedral angle (in radians) across a hinge
  */
-export function computeDihedralAngle(hinge: HingeElement, positions: Float64Array): number {
+export function computeDihedralAngle(
+  hinge: HingeElement,
+  positions: Float64Array,
+  updatePrevious: boolean = false
+): number {
   const i0 = hinge.v0 * 3;
   const i1 = hinge.v1 * 3;
   const i2 = hinge.v2 * 3;
@@ -66,7 +70,9 @@ export function computeDihedralAngle(hinge: HingeElement, positions: Float64Arra
     const k = Math.round((hinge.previousAngle - rawTheta) / (2 * Math.PI));
     theta = rawTheta + k * 2 * Math.PI;
   }
-  hinge.previousAngle = theta;
+  if (updatePrevious) {
+    hinge.previousAngle = theta;
+  }
   return theta;
 }
 

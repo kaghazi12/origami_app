@@ -80,6 +80,8 @@ export interface SimulationState {
   velocities: Float64Array;
   /** numHinges per-hinge current rest angles in radians */
   restAngles: Float64Array;
+  /** numHinges per-hinge unwrapped previous dihedral angles in radians */
+  previousAngles?: Float64Array;
   /** Simulation step count */
   stepCount: number;
   /** Simulated time elapsed in seconds */

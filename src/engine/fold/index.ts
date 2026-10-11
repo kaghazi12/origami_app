@@ -7,5 +7,6 @@ export {
   createWaterbombBasePattern,
   createPreliminaryBasePattern,
   createMiuraOriPattern,
+  computeMiuraCoupledAngles,
 } from './templates';
 export { extractPlanarFaces, resolveTJunctions } from './faces';

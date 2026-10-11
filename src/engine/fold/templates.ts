@@ -1,4 +1,4 @@
-import { FoldFormat } from '../types';
+import { FoldFormat, EdgeAssignment } from '../types';
 
 /**
  * Creates a blank rectangular sheet of paper
@@ -234,8 +234,27 @@ export function createPreliminaryBasePattern(size: number = 1): FoldFormat {
 }
 
 /**
+ * Computes 1-DOF rigid origami coupled fold angles for Miura-ori
+ * Given parallelogram acute angle gamma and vertical fold angle theta_V:
+ * tan(|theta_H| / 2) = cos(gamma) * tan(|theta_V| / 2)
+ */
+export function computeMiuraCoupledAngles(
+  gammaRad: number,
+  foldAngleVRad: number
+): { thetaV: number; thetaH: number } {
+  const tanHalfV = Math.tan(Math.abs(foldAngleVRad) / 2);
+  const tanHalfH = Math.cos(gammaRad) * tanHalfV;
+  const foldAngleHRad = 2 * Math.atan(tanHalfH);
+  return {
+    thetaV: foldAngleVRad,
+    thetaH: Math.sign(foldAngleVRad || 1) * foldAngleHRad,
+  };
+}
+
+/**
  * Classical Miura-ori periodic origami tessellation pattern
- * Periodic parallelogram tessellation with negative Poisson's ratio (auxetic collapse).
+ * Periodic parallelogram tessellation with stated acute angle gamma.
+ * 1-DOF rigid-foldable mechanism with auxetic (negative Poisson's ratio) collapse.
  * Satisfies Kawasaki's and Maekawa's theorems at every interior vertex.
  */
 export function createMiuraOriPattern(
@@ -243,29 +262,35 @@ export function createMiuraOriPattern(
   rows: number = 3,
   width: number = 1,
   height: number = 1,
-  skewRatio: number = 0.2
+  gammaDeg: number = 60
 ): FoldFormat {
+  const gammaRad = (gammaDeg * Math.PI) / 180;
   const dx = width / cols;
   const dy = height / rows;
-  const deltaY = dy * skewRatio;
+  const shiftX = dy * Math.cos(gammaRad); // horizontal shift for parallelogram
 
   const vertices_coords: [number, number][] = [];
   const vLookup = (c: number, r: number) => r * (cols + 1) + c;
 
   for (let r = 0; r <= rows; r++) {
+    const xOffset = r % 2 === 1 ? shiftX : 0;
     for (let c = 0; c <= cols; c++) {
-      const x = c * dx;
-      const yShift = c % 2 === 1 ? deltaY : 0;
-      const y = r * dy + yShift;
+      const x = c * dx + xOffset;
+      const y = r * dy;
       vertices_coords.push([x, y]);
     }
   }
 
   const edges_vertices: [number, number][] = [];
-  const edges_assignment: any[] = [];
+  const edges_assignment: EdgeAssignment[] = [];
   const edges_foldAngle: number[] = [];
 
-  // Horizontal zigzag edges: between (c, r) and (c+1, r)
+  // Coupled fold angles at default reference fold state theta_V = 45 deg
+  const refThetaVDeg = 45;
+  const { thetaH: refThetaHRad } = computeMiuraCoupledAngles(gammaRad, (refThetaVDeg * Math.PI) / 180);
+  const refThetaHDeg = (refThetaHRad * 180) / Math.PI;
+
+  // Horizontal edges: between (c, r) and (c+1, r)
   for (let r = 0; r <= rows; r++) {
     const isBoundaryRow = r === 0 || r === rows;
     for (let c = 0; c < cols; c++) {
@@ -279,12 +304,12 @@ export function createMiuraOriPattern(
       } else {
         const isMountain = (c + r) % 2 === 0;
         edges_assignment.push(isMountain ? 'M' : 'V');
-        edges_foldAngle.push(isMountain ? -90 : 90);
+        edges_foldAngle.push(isMountain ? -refThetaHDeg : refThetaHDeg);
       }
     }
   }
 
-  // Vertical straight edges: between (c, r) and (c, r+1)
+  // Vertical zigzag edges: between (c, r) and (c, r+1)
   for (let c = 0; c <= cols; c++) {
     const isBoundaryCol = c === 0 || c === cols;
     for (let r = 0; r < rows; r++) {
@@ -298,7 +323,7 @@ export function createMiuraOriPattern(
       } else {
         const isMountain = c % 2 === 1;
         edges_assignment.push(isMountain ? 'M' : 'V');
-        edges_foldAngle.push(isMountain ? -90 : 90);
+        edges_foldAngle.push(isMountain ? -refThetaVDeg : refThetaVDeg);
       }
     }
   }
@@ -319,7 +344,7 @@ export function createMiuraOriPattern(
   return {
     file_spec: 1.1,
     file_creator: 'origami-fold-engine',
-    file_title: `Miura-ori (${cols}x${rows})`,
+    file_title: `Miura-ori (${cols}x${rows}, gamma=${gammaDeg}°)`,
     file_classes: ['singleModel'],
     frame_classes: ['creasePattern'],
     vertices_coords,

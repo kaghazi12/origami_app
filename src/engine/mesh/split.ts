@@ -253,11 +253,13 @@ function splitMeshSingleSegment(
       let tAngle = 0;
       let rAngle = 0;
       let stiffness = kFacet;
+      let prevAngle: number | undefined = 0;
 
       if (cutEdgeSet.has(k)) {
         assignment = newAssignment;
         tAngle = targetAngleRad;
         rAngle = 0; // Flat initial rest angle -> NO JUMP!
+        prevAngle = 0;
         stiffness = assignment === 'M' || assignment === 'V' ? kCrease : kFacet;
       } else {
         const oldHinge = oldHingeMap.get(k);
@@ -265,6 +267,7 @@ function splitMeshSingleSegment(
           assignment = oldHinge.assignment;
           tAngle = oldHinge.targetAngle;
           rAngle = oldHinge.restAngle;
+          prevAngle = oldHinge.previousAngle;
           stiffness = oldHinge.stiffness;
         } else {
           let parentKey: string | null = null;
@@ -280,6 +283,7 @@ function splitMeshSingleSegment(
             assignment = parentHinge.assignment;
             tAngle = parentHinge.targetAngle;
             rAngle = parentHinge.restAngle;
+            prevAngle = parentHinge.previousAngle;
             stiffness = parentHinge.stiffness;
           }
         }
@@ -294,6 +298,7 @@ function splitMeshSingleSegment(
         assignment,
         targetAngle: tAngle,
         restAngle: rAngle,
+        previousAngle: prevAngle,
         stiffness,
       });
     }

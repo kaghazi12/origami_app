@@ -285,7 +285,7 @@ describe('Phase 3.5: Hardening Pass - Finite-Difference Gradient & Momentum Chec
       positions[3 * 3 + 1] = 0.5;
       positions[3 * 3 + 2] = Math.sin(rad);
 
-      const computedRad = computeDihedralAngle(hinge, positions);
+      const computedRad = computeDihedralAngle(hinge, positions, true);
       const computedDeg = (computedRad * 180) / Math.PI;
       trackedAnglesDeg.push(computedDeg);
     }
@@ -297,7 +297,7 @@ describe('Phase 3.5: Hardening Pass - Finite-Difference Gradient & Momentum Chec
       positions[3 * 3 + 1] = 0.5;
       positions[3 * 3 + 2] = Math.sin(rad);
 
-      const computedRad = computeDihedralAngle(hinge, positions);
+      const computedRad = computeDihedralAngle(hinge, positions, true);
       const computedDeg = (computedRad * 180) / Math.PI;
       trackedAnglesDeg.push(computedDeg);
     }
