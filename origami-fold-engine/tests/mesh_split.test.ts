@@ -1,30 +1,25 @@
 import { describe, expect, it } from 'vitest';
 import { createHalfFoldPattern } from '../../src/engine/fold';
-import { createMeshFromFold, splitMeshAlongSegment } from '../../src/engine/mesh';
+import {
+  createMeshFromFold,
+  splitMeshAlongSegment,
+  splitMeshAlongPolyline,
+  getRenderBuffers,
+} from '../../src/engine/mesh';
 
-describe('Phase 2: Editable Mesh & Shape Continuity (Amendment B)', () => {
-  it('splits a half-folded 3D mesh and proves the shape does not jump', () => {
-    // 1. Create a half-fold pattern (valley crease at u = 0.5)
+describe('Phase 2.5: Editable Mesh & Shape Continuity (Amendments A & B)', () => {
+  it('splits a half-folded 3D mesh with 1e-9 precision and proves shape does not jump', () => {
     const fold = createHalfFoldPattern(1, 1);
     const mesh = createMeshFromFold(fold);
 
-    // 2. Pose the mesh in a 3D half-folded state (right flap rotated 90 deg around u = 0.5 into +z)
-    // Vertices:
-    // v0: (0, 0, 0)
-    // v1: (0.5, 0, 0) [crease bottom]
-    // v2: (1, 0, 0) -> in 3D: (0.5, 0, 0.5)
-    // v3: (1, 1, 0) -> in 3D: (0.5, 1, 0.5)
-    // v4: (0.5, 1, 0) [crease top]
-    // v5: (0, 1, 0)
+    // Pose the mesh in a 3D half-folded state (right flap rotated 90 deg around u = 0.5 into +z)
     for (let i = 0; i < mesh.numVertices; i++) {
       const u = mesh.uvs[i * 2 + 0];
       const v = mesh.uvs[i * 2 + 1];
       if (u > 0.5) {
-        // Rotated 90 degrees around crease line at u = 0.5
-        const offset = u - 0.5;
         mesh.positions[i * 3 + 0] = 0.5;
         mesh.positions[i * 3 + 1] = v;
-        mesh.positions[i * 3 + 2] = offset; // 3D elevation
+        mesh.positions[i * 3 + 2] = u - 0.5;
       } else {
         mesh.positions[i * 3 + 0] = u;
         mesh.positions[i * 3 + 1] = v;
@@ -32,7 +27,6 @@ describe('Phase 2: Editable Mesh & Shape Continuity (Amendment B)', () => {
       }
     }
 
-    // Set the valley hinge restAngle to 90 deg (pi / 2) to match this 3D pose
     const valleyHinge = mesh.hinges.find((h) => h.assignment === 'V')!;
     expect(valleyHinge).toBeDefined();
     valleyHinge.restAngle = Math.PI / 2;
@@ -40,8 +34,7 @@ describe('Phase 2: Editable Mesh & Shape Continuity (Amendment B)', () => {
     const initialVertCount = mesh.numVertices;
     const initialTriCount = mesh.numTriangles;
 
-    // 3. Cut across the paper diagonally from (0.2, -0.1) to (0.8, 1.1)
-    // This crosses both the flat left wing (u < 0.5) and the 3D-elevated right wing (u > 0.5)
+    // Cut diagonally across the paper
     const cutP0: [number, number] = [0.2, -0.1];
     const cutP1: [number, number] = [0.8, 1.1];
 
@@ -50,12 +43,10 @@ describe('Phase 2: Editable Mesh & Shape Continuity (Amendment B)', () => {
       targetAngleDeg: 180,
     });
 
-    // 4. Assert new geometry was formed
     expect(splitMesh.numVertices).toBeGreaterThan(initialVertCount);
     expect(splitMesh.numTriangles).toBeGreaterThan(initialTriCount);
 
-    // 5. Verification: CHECK THE SHAPE DOES NOT JUMP
-    // Every vertex in splitMesh (old and new) must lie EXACTLY on the half-folded 3D surface!
+    // Verify 1e-9 tolerance on all 3D coordinates (Requirement 1)
     for (let i = 0; i < splitMesh.numVertices; i++) {
       const u = splitMesh.uvs[i * 2 + 0];
       const v = splitMesh.uvs[i * 2 + 1];
@@ -65,29 +56,95 @@ describe('Phase 2: Editable Mesh & Shape Continuity (Amendment B)', () => {
       const z3d = splitMesh.positions[i * 3 + 2];
 
       if (u <= 0.5) {
-        // Left side: must remain strictly flat at z = 0 with x = u, y = v
-        expect(x3d).toBeCloseTo(u, 6);
-        expect(y3d).toBeCloseTo(v, 6);
-        expect(z3d).toBeCloseTo(0, 6);
+        expect(Math.abs(x3d - u)).toBeLessThan(1e-9);
+        expect(Math.abs(y3d - v)).toBeLessThan(1e-9);
+        expect(Math.abs(z3d)).toBeLessThan(1e-9);
       } else {
-        // Right side: must lie strictly on the vertical 3D flap at x = 0.5, y = v, z = u - 0.5
         const expectedZ = u - 0.5;
-        expect(x3d).toBeCloseTo(0.5, 6);
-        expect(y3d).toBeCloseTo(v, 6);
-        expect(z3d).toBeCloseTo(expectedZ, 6);
+        expect(Math.abs(x3d - 0.5)).toBeLessThan(1e-9);
+        expect(Math.abs(y3d - v)).toBeLessThan(1e-9);
+        expect(Math.abs(z3d - expectedZ)).toBeLessThan(1e-9);
       }
     }
 
-    // 6. Verify preexisting hinge states are preserved
+    // Preexisting hinge preserved
     const preservedValleyHinges = splitMesh.hinges.filter(
-      (h) => h.assignment === 'V' && Math.abs(h.restAngle - Math.PI / 2) < 1e-4
+      (h) => h.assignment === 'V' && Math.abs(h.restAngle - Math.PI / 2) < 1e-9
     );
     expect(preservedValleyHinges.length).toBeGreaterThan(0);
 
-    // 7. Verify the newly inserted crease has initial restAngle = 0 (no sudden impulse!)
+    // Newly cut crease has initial restAngle = 0
     const newlyCutCreases = splitMesh.hinges.filter(
-      (h) => h.assignment === 'V' && Math.abs(h.restAngle) < 1e-6
+      (h) => h.assignment === 'V' && Math.abs(h.restAngle) < 1e-9
     );
     expect(newlyCutCreases.length).toBeGreaterThan(0);
+  });
+
+  it('splits a mesh along a 2-segment polyline with 1e-9 precision (Requirement 5)', () => {
+    const fold = createHalfFoldPattern(1, 1);
+    const mesh = createMeshFromFold(fold);
+
+    // Fold right flap at 90 deg
+    for (let i = 0; i < mesh.numVertices; i++) {
+      const u = mesh.uvs[i * 2 + 0];
+      const v = mesh.uvs[i * 2 + 1];
+      if (u > 0.5) {
+        mesh.positions[i * 3 + 0] = 0.5;
+        mesh.positions[i * 3 + 1] = v;
+        mesh.positions[i * 3 + 2] = u - 0.5;
+      } else {
+        mesh.positions[i * 3 + 0] = u;
+        mesh.positions[i * 3 + 1] = v;
+        mesh.positions[i * 3 + 2] = 0;
+      }
+    }
+
+    const initialVertCount = mesh.numVertices;
+
+    // 2-segment polyline: [P0 -> P1 -> P2]
+    const polyline: [number, number][] = [
+      [0.1, 0.3],
+      [0.4, 0.6],
+      [0.9, 0.8],
+    ];
+
+    const polySplitMesh = splitMeshAlongPolyline(mesh, polyline, {
+      assignment: 'M',
+      targetAngleDeg: -90,
+    });
+
+    expect(polySplitMesh.numVertices).toBeGreaterThan(initialVertCount + 1);
+
+    // Verify all vertices remain exactly on the half-folded 3D surface
+    for (let i = 0; i < polySplitMesh.numVertices; i++) {
+      const u = polySplitMesh.uvs[i * 2 + 0];
+      const v = polySplitMesh.uvs[i * 2 + 1];
+
+      const x3d = polySplitMesh.positions[i * 3 + 0];
+      const y3d = polySplitMesh.positions[i * 3 + 1];
+      const z3d = polySplitMesh.positions[i * 3 + 2];
+
+      if (u <= 0.5) {
+        expect(Math.abs(x3d - u)).toBeLessThan(1e-9);
+        expect(Math.abs(y3d - v)).toBeLessThan(1e-9);
+        expect(Math.abs(z3d)).toBeLessThan(1e-9);
+      } else {
+        const expectedZ = u - 0.5;
+        expect(Math.abs(x3d - 0.5)).toBeLessThan(1e-9);
+        expect(Math.abs(y3d - v)).toBeLessThan(1e-9);
+        expect(Math.abs(z3d - expectedZ)).toBeLessThan(1e-9);
+      }
+    }
+  });
+
+  it('converts Float64Array simulation state to Float32Array render buffers', () => {
+    const fold = createHalfFoldPattern(1, 1);
+    const mesh = createMeshFromFold(fold);
+
+    const renderBuffers = getRenderBuffers(mesh);
+    expect(renderBuffers.positions).toBeInstanceOf(Float32Array);
+    expect(renderBuffers.uvs).toBeInstanceOf(Float32Array);
+    expect(renderBuffers.indices).toBeInstanceOf(Uint32Array);
+    expect(renderBuffers.positions.length).toBe(mesh.positions.length);
   });
 });

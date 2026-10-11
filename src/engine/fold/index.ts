@@ -7,3 +7,4 @@ export {
   createWaterbombBasePattern,
   createPreliminaryBasePattern,
 } from './templates';
+export { extractPlanarFaces, resolveTJunctions } from './faces';

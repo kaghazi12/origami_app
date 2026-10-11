@@ -7,7 +7,8 @@
     "dev": "vite",
     "build": "tsc && vite build",
     "preview": "vite preview",
-    "test:engine": "npm test --prefix origami-fold-engine"
+    "test:engine": "npm test --prefix origami-fold-engine",
+    "test:engine:new": "npm run test:new --prefix origami-fold-engine"
   },
   "dependencies": {
     "@react-three/drei": "^10.0.7",

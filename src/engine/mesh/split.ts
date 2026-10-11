@@ -18,7 +18,7 @@ function intersectSegments2D(
   p2: [number, number],
   q1: [number, number],
   q2: [number, number],
-  eps = 1e-6
+  eps = 1e-9
 ): number | null {
   const dx1 = p2[0] - p1[0];
   const dy1 = p2[1] - p1[1];
@@ -26,7 +26,7 @@ function intersectSegments2D(
   const dy2 = q2[1] - q1[1];
 
   const denom = dx1 * dy2 - dy1 * dx2;
-  if (Math.abs(denom) < 1e-12) return null; // Parallel
+  if (Math.abs(denom) < 1e-14) return null; // Parallel
 
   const t = ((q1[0] - p1[0]) * dy2 - (q1[1] - p1[1]) * dx2) / denom;
   const s = ((q1[0] - p1[0]) * dy1 - (q1[1] - p1[1]) * dx1) / denom;
@@ -38,11 +38,10 @@ function intersectSegments2D(
 }
 
 /**
- * Splits an existing TriMesh along a 2D line segment [cutP0, cutP1] in paper space.
- * Preserves existing 3D positions, barycentric-interpolates new vertices,
- * and maintains hinge states so that the 3D shape does not jump (Amendment B).
+ * Splits an existing TriMesh along a single 2D line segment [cutP0, cutP1] in paper space.
+ * Uses Float64Array for exact numerical preservation.
  */
-export function splitMeshAlongSegment(
+function splitMeshSingleSegment(
   mesh: TriMesh,
   cutP0: [number, number],
   cutP1: [number, number],
@@ -54,7 +53,7 @@ export function splitMeshAlongSegment(
   const kFacet = options.facetStiffness ?? 20.0;
   const kAxial = options.axialStiffness ?? 10000;
 
-  // Clone vertex arrays so we can append new vertices
+  // Clone vertex arrays in 64-bit precision
   const uvsList: [number, number][] = [];
   const positionsList: [number, number, number][] = [];
   const velocitiesList: [number, number, number][] = [];
@@ -98,7 +97,6 @@ export function splitMeshAlongSegment(
     const key = edgeKey(v0, v1);
     const existing = splitEdges.get(key);
     if (existing) {
-      // Adjust parameter t if v0 > v1
       const t = v0 < v1 ? existing.t : 1 - existing.t;
       return { newVertex: existing.newVertex, t };
     }
@@ -116,7 +114,7 @@ export function splitMeshAlongSegment(
     const newV = uv0[1] + (uv1[1] - uv0[1]) * t;
     uvsList.push([newU, newV]);
 
-    // Barycentric-interpolated 3D position
+    // Barycentric-interpolated 3D position in Float64
     const p0 = positionsList[v0];
     const p1 = positionsList[v1];
     const newX = p0[0] + (p1[0] - p0[0]) * t;
@@ -155,40 +153,31 @@ export function splitMeshAlongSegment(
     const numSplits = (splitAB ? 1 : 0) + (splitBC ? 1 : 0) + (splitCA ? 1 : 0);
 
     if (numSplits === 0) {
-      // Triangle unaffected
       newTriangles.push([a, b, c]);
     } else if (numSplits === 2) {
-      // Line cuts through 2 edges, splitting triangle into 1 triangle and 1 quad (2 triangles)
       if (splitAB && splitCA) {
         const p = splitAB.newVertex;
         const q = splitCA.newVertex;
-        // Triangle 1 (corner a): [a, p, q]
         newTriangles.push([a, p, q]);
-        // Quad [p, b, c, q] -> 2 triangles
         newTriangles.push([p, b, c]);
         newTriangles.push([p, c, q]);
         cutInternalEdges.push([p, q]);
       } else if (splitAB && splitBC) {
         const p = splitAB.newVertex;
         const q = splitBC.newVertex;
-        // Triangle 1 (corner b): [b, q, p]
         newTriangles.push([b, q, p]);
-        // Quad [a, p, q, c] -> 2 triangles
         newTriangles.push([a, p, q]);
         newTriangles.push([a, q, c]);
         cutInternalEdges.push([p, q]);
       } else if (splitBC && splitCA) {
         const p = splitBC.newVertex;
         const q = splitCA.newVertex;
-        // Triangle 1 (corner c): [c, q, p]
         newTriangles.push([c, q, p]);
-        // Quad [a, b, p, q] -> 2 triangles
         newTriangles.push([a, b, p]);
         newTriangles.push([a, p, q]);
         cutInternalEdges.push([p, q]);
       }
     } else if (numSplits === 1) {
-      // Cut touched one edge and likely terminated or hit a corner
       if (splitAB) {
         const p = splitAB.newVertex;
         newTriangles.push([a, p, c]);
@@ -203,13 +192,11 @@ export function splitMeshAlongSegment(
         newTriangles.push([p, a, b]);
       }
     } else {
-      // Degenerate (rare 3 edge split): retain original
       newTriangles.push([a, b, c]);
     }
   }
 
-  // Rebuild Bars
-  // Gather all unique edges from newTriangles
+  // Rebuild Bars and Hinges
   interface EdgeTriUsage {
     triIndex: number;
     opp: number;
@@ -247,7 +234,6 @@ export function splitMeshAlongSegment(
     const u = parseInt(strU, 10);
     const v = parseInt(strV, 10);
 
-    // Compute rest length from 2D UVs
     const uv0 = uvsList[u];
     const uv1 = uvsList[v];
     const restLength = Math.hypot(uv1[0] - uv0[0], uv1[1] - uv0[1]);
@@ -268,15 +254,12 @@ export function splitMeshAlongSegment(
       let rAngle = 0;
       let stiffness = kFacet;
 
-      // Check if this is the newly cut crease
       if (cutEdgeSet.has(k)) {
         assignment = newAssignment;
         tAngle = targetAngleRad;
         rAngle = 0; // Flat initial rest angle -> NO JUMP!
         stiffness = assignment === 'M' || assignment === 'V' ? kCrease : kFacet;
       } else {
-        // Inherit from old hinge if this edge was part of an existing hinge
-        // Or if it was split from an old hinge edge
         const oldHinge = oldHingeMap.get(k);
         if (oldHinge) {
           assignment = oldHinge.assignment;
@@ -284,7 +267,6 @@ export function splitMeshAlongSegment(
           rAngle = oldHinge.restAngle;
           stiffness = oldHinge.stiffness;
         } else {
-          // Check if it belongs to a split edge
           let parentKey: string | null = null;
           for (const [pKey, s] of splitEdges.entries()) {
             const [pU, pV] = pKey.split('_').map((n) => parseInt(n, 10));
@@ -317,12 +299,12 @@ export function splitMeshAlongSegment(
     }
   }
 
-  // Build flattened typed arrays
+  // Build Float64Array buffers
   const totalVerts = uvsList.length;
-  const uvsArray = new Float32Array(totalVerts * 2);
-  const posArray = new Float32Array(totalVerts * 3);
-  const velArray = new Float32Array(totalVerts * 3);
-  const massArray = new Float32Array(totalVerts);
+  const uvsArray = new Float64Array(totalVerts * 2);
+  const posArray = new Float64Array(totalVerts * 3);
+  const velArray = new Float64Array(totalVerts * 3);
+  const massArray = new Float64Array(totalVerts);
 
   for (let i = 0; i < totalVerts; i++) {
     uvsArray[i * 2 + 0] = uvsList[i][0];
@@ -357,4 +339,37 @@ export function splitMeshAlongSegment(
     bars: newBars,
     hinges: newHinges,
   };
+}
+
+/**
+ * Splits an existing TriMesh along a polyline (list of UV points).
+ * Preserves current 3D positions, interpolates new vertices in Float64, and maintains hinge states.
+ */
+export function splitMeshAlongPolyline(
+  mesh: TriMesh,
+  polyline: [number, number][],
+  options: SplitOptions = {}
+): TriMesh {
+  if (polyline.length < 2) return mesh;
+
+  let currentMesh = mesh;
+  for (let i = 0; i < polyline.length - 1; i++) {
+    const p0 = polyline[i];
+    const p1 = polyline[i + 1];
+    currentMesh = splitMeshSingleSegment(currentMesh, p0, p1, options);
+  }
+
+  return currentMesh;
+}
+
+/**
+ * Thin wrapper over splitMeshAlongPolyline for a single segment (Requirement 5)
+ */
+export function splitMeshAlongSegment(
+  mesh: TriMesh,
+  cutP0: [number, number],
+  cutP1: [number, number],
+  options: SplitOptions = {}
+): TriMesh {
+  return splitMeshAlongPolyline(mesh, [cutP0, cutP1], options);
 }

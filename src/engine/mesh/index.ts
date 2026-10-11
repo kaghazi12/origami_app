@@ -11,5 +11,8 @@ export {
   getSimulationState,
   setSimulationState,
   rampRestAngles,
+  getRenderBuffers,
+  type MeshOptions,
 } from './mesh';
-export { splitMeshAlongSegment } from './split';
+export { splitMeshAlongPolyline, splitMeshAlongSegment, type SplitOptions } from './split';
+export { computeMeshQuality, createRegularTriangulation, type MeshQuality } from './remesh';

@@ -69,14 +69,15 @@ export interface HingeElement {
 /**
  * Persistent Simulation State (Amendment A)
  * The solver can continue from any current 3D pose at any time.
+ * Uses Float64Array for simulation precision; convert to Float32Array only for rendering.
  */
 export interface SimulationState {
   /** 3 * numVertices 3D positions [x, y, z] */
-  positions: Float32Array;
+  positions: Float64Array;
   /** 3 * numVertices 3D velocities [vx, vy, vz] */
-  velocities: Float32Array;
+  velocities: Float64Array;
   /** numHinges per-hinge current rest angles in radians */
-  restAngles: Float32Array;
+  restAngles: Float64Array;
   /** Simulation step count */
   stepCount: number;
   /** Simulated time elapsed in seconds */
@@ -90,19 +91,28 @@ export interface TriMesh {
   numVertices: number;
   numTriangles: number;
   /** 2 * numVertices 2D paper coordinates [u, v] */
-  uvs: Float32Array;
+  uvs: Float64Array;
   /** 3 * numVertices 3D coordinates [x, y, z] */
-  positions: Float32Array;
+  positions: Float64Array;
   /** 3 * numVertices 3D velocities [vx, vy, vz] */
-  velocities: Float32Array;
+  velocities: Float64Array;
   /** numVertices masses */
-  masses: Float32Array;
+  masses: Float64Array;
   /** 3 * numTriangles triangle index buffer */
   indices: Uint32Array;
   /** Axial springs */
   bars: BarElement[];
   /** Torsional springs */
   hinges: HingeElement[];
+}
+
+/**
+ * Render/transfer buffers converted to Float32Array for WebGL / Three.js
+ */
+export interface RenderBuffers {
+  positions: Float32Array;
+  uvs: Float32Array;
+  indices: Uint32Array;
 }
 
 export class FoldError extends Error {
