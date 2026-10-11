@@ -7,7 +7,7 @@
   "main": "src/index.ts",
   "scripts": {
     "test": "vitest run",
-    "test:new": "vitest run tests/fold_spec.test.ts tests/mesh_topology.test.ts tests/mesh_split.test.ts tests/mesh_remesh.test.ts tests/planar_faces.test.ts",
+    "test:new": "vitest run tests/fold_spec.test.ts tests/mesh_topology.test.ts tests/mesh_split.test.ts tests/mesh_remesh.test.ts tests/planar_faces.test.ts tests/physics_core.test.ts",
     "test:watch": "vitest",
     "typecheck": "tsc --noEmit"
   },
