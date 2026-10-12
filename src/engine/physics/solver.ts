@@ -6,6 +6,8 @@ export interface SolverOptions {
   dt?: number;
   damping?: number;
   fixedVertices?: Set<number>;
+  kineticDamping?: boolean; // Barnes kinetic damping: zeroes velocities at each kinetic energy peak
+  massScaling?: boolean;    // Barnes fictitious mass scaling: scales node mass proportional to node stiffness
 }
 
 export interface SolveResult {
@@ -14,6 +16,31 @@ export interface SolveResult {
   kineticEnergy: number;
   maxResidualForce: number;
   maxStrain: number;
+}
+
+/**
+ * Computes Barnes fictitious nodal mass scaling from direct nodal stiffness:
+ * m_i = max(m_min, S_i / omega_target^2), equalizing local resonant frequencies
+ */
+export function computeBarnesMassScaling(mesh: TriMesh, targetOmega = 500): Float64Array {
+  const numV = mesh.numVertices;
+  const nodalStiffness = new Float64Array(numV);
+  for (const b of mesh.bars) {
+    nodalStiffness[b.v0] += b.stiffness;
+    nodalStiffness[b.v1] += b.stiffness;
+  }
+  for (const h of mesh.hinges) {
+    nodalStiffness[h.v0] += h.stiffness;
+    nodalStiffness[h.v1] += h.stiffness;
+    nodalStiffness[h.v2] += h.stiffness;
+    nodalStiffness[h.v3] += h.stiffness;
+  }
+  const scaledMasses = new Float64Array(numV);
+  const factor = 1.0 / (targetOmega * targetOmega);
+  for (let i = 0; i < numV; i++) {
+    scaledMasses[i] = Math.max(0.01, nodalStiffness[i] * factor);
+  }
+  return scaledMasses;
 }
 
 /**
@@ -70,13 +97,26 @@ export class BarHingeSolver {
   readonly fixedVertices: Set<number>;
   dt: number;
   damping: number;
+  kineticDamping: boolean;
+  massScaling: boolean;
+  prevKineticEnergy: number;
 
   constructor(mesh: TriMesh, options: SolverOptions = {}) {
     this.mesh = mesh;
     this.forces = new Float64Array(mesh.numVertices * 3);
     this.fixedVertices = options.fixedVertices ?? new Set<number>();
+    this.kineticDamping = options.kineticDamping ?? false;
+    this.massScaling = options.massScaling ?? false;
+    this.prevKineticEnergy = 0;
+
+    if (this.massScaling) {
+      const scaled = computeBarnesMassScaling(mesh);
+      mesh.masses.set(scaled);
+    }
+
     this.dt = options.dt ?? computeStableTimeStep(mesh, 0.4);
-    this.damping = options.damping ?? 0.95;
+    // If kinetic damping is active without explicit damping set, default to 1.0 (undamped Hamiltonian flight between peaks)
+    this.damping = options.damping ?? (this.kineticDamping ? 1.0 : 0.95);
   }
 
   /**
@@ -134,6 +174,13 @@ export class BarHingeSolver {
       kineticEnergy += 0.5 * m * (vx * vx + vy * vy + vz * vz);
     }
 
+    // Barnes Kinetic Damping: detect KE peak (current KE < previous KE)
+    if (this.kineticDamping && kineticEnergy < this.prevKineticEnergy && this.prevKineticEnergy > 1e-12) {
+      this.mesh.velocities.fill(0);
+      kineticEnergy = 0;
+    }
+    this.prevKineticEnergy = kineticEnergy;
+
     return {
       potentialEnergy: barEnergy + hingeEnergy,
       kineticEnergy,
@@ -187,14 +234,13 @@ export class BarHingeSolver {
 
     for (let iter = 0; iter < maxIterations; iter++) {
       const { kineticEnergy } = this.step(dt, damping);
-      finalKe = kineticEnergy;
-
       const maxResForce = this.getMaxResidualForce();
+      const forceConverged = residualForceTol !== undefined && maxResForce < residualForceTol;
       const keConverged = kineticEnergy < kineticTol;
-      const forceConverged = residualForceTol === undefined || maxResForce < residualForceTol;
 
-      // Convergence check: both kinetic energy and residual force (if specified) must be satisfied
-      if (iter > 20 && keConverged && forceConverged) {
+      // Convergence check: if residualForceTol is specified, static equilibrium is reached when forces balance.
+      // Otherwise, falls back to kinetic energy decay.
+      if (iter > 5 && (forceConverged || (residualForceTol === undefined && keConverged))) {
         converged = true;
         return {
           iterations: iter + 1,

@@ -267,7 +267,7 @@ export function createMiuraOriPattern(
   const gammaRad = (gammaDeg * Math.PI) / 180;
   const dx = width / cols;
   const dy = height / rows;
-  const shiftX = dy * Math.cos(gammaRad); // horizontal shift for parallelogram
+  const shiftX = dy / Math.tan(gammaRad); // horizontal shift for exact acute angle gamma
 
   const vertices_coords: [number, number][] = [];
   const vLookup = (c: number, r: number) => r * (cols + 1) + c;

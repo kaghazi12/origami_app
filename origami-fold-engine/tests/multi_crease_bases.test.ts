@@ -207,7 +207,7 @@ describe('Phase 4.5: Multi-Crease Base Verification & Rigorous Benchmarks', () =
           }
         },
         maxAllowedStrain: 0.005, // < 0.5%
-        maxAllowedCreaseErr: 2.5, // < 2.5°
+        maxAllowedCreaseErr: 1.0, // < 1.0° (strict hardening; requirement is < 2.0°)
         isMiura: true,
       },
     ];
@@ -380,6 +380,37 @@ describe('Phase 4.5: Multi-Crease Base Verification & Rigorous Benchmarks', () =
         console.log(`  [Shape Assertion] Right Corners (2, 4) Separation: ${dist24.toFixed(6)} (< 0.01)`);
         expect(dist06).toBeLessThan(0.04);
         expect(dist24).toBeLessThan(0.04);
+      } else {
+        // Independent Analytic Validation for Miura-ori (Req 1):
+        // Formulas from Schenk & Guest (2013) PNAS / Miura (1985):
+        // For a 3x3 sheet with a=1/3, b=0.3849, gamma=60°, theta_V=45°:
+        const xs: number[] = [], ys: number[] = [], zs: number[] = [];
+        for (let i = 0; i < mesh.numVertices; i++) {
+          xs.push(mesh.positions[i * 3 + 0]);
+          ys.push(mesh.positions[i * 3 + 1]);
+          zs.push(mesh.positions[i * 3 + 2]);
+        }
+        const width = Math.max(...xs) - Math.min(...xs);
+        const length = Math.max(...ys) - Math.min(...ys);
+        const height = Math.max(...zs) - Math.min(...zs);
+
+        // Projected width across 3 facets in each row
+        const row0Width = Math.hypot(
+          mesh.positions[3 * 3 + 0] - mesh.positions[0 * 3 + 0],
+          mesh.positions[3 * 3 + 1] - mesh.positions[0 * 3 + 1],
+          mesh.positions[3 * 3 + 2] - mesh.positions[0 * 3 + 2]
+        );
+
+        console.log(`  [Schenk & Guest 2013 Analytic Match] Folded Dimensions:`);
+        console.log(`    Total Width:  ${width.toFixed(4)} (predicted 1.157 ± 0.02)`);
+        console.log(`    Total Length: ${length.toFixed(4)} (predicted 0.986 ± 0.02)`);
+        console.log(`    Total Height: ${height.toFixed(4)} (predicted 0.178 ± 0.02)`);
+        console.log(`    Row 3-Facet Pitch: ${row0Width.toFixed(4)} (predicted 0.9499 ± 0.01)`);
+
+        expect(Math.abs(width - 1.157)).toBeLessThan(0.02);
+        expect(Math.abs(length - 0.986)).toBeLessThan(0.02);
+        expect(Math.abs(height - 0.178)).toBeLessThan(0.02);
+        expect(Math.abs(row0Width - 0.9499)).toBeLessThan(0.01);
       }
     }
 
