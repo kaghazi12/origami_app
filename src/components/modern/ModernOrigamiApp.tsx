@@ -52,6 +52,7 @@ export const ModernOrigamiApp: React.FC = () => {
   const [latencyMs, setLatencyMs] = useState<number>(0);
   const frameCountRef = useRef<number>(0);
   const lastFpsTimeRef = useRef<number>(performance.now());
+  const lastTelemetryTimeRef = useRef<number>(0);
 
   // Ping-pong buffers for client-side zero-allocation rendering while returning worker buffers
   const pingPongRef = useRef<{ bufA: Float32Array | null; bufB: Float32Array | null; flag: boolean }>({
@@ -122,13 +123,19 @@ export const ModernOrigamiApp: React.FC = () => {
         }
       }
 
+      // 1. Immediately update positions for fluid 3D canvas rendering
       setPositions(clientBuf);
-      setStats(frameEvent.stats);
-      setLatencyMs(frameEvent.latencyMs);
+
+      // 2. Coalesce UI telemetry state updates to <= 10 Hz (every 100 ms) via ref gating
+      const now = performance.now();
+      if (now - lastTelemetryTimeRef.current >= 100) {
+        setStats(frameEvent.stats);
+        setLatencyMs(frameEvent.latencyMs);
+        lastTelemetryTimeRef.current = now;
+      }
 
       // Measure client FPS
       frameCountRef.current++;
-      const now = performance.now();
       if (now - lastFpsTimeRef.current >= 500) {
         const measured = (frameCountRef.current * 1000) / (now - lastFpsTimeRef.current);
         setFps(Math.round(measured));
@@ -136,7 +143,7 @@ export const ModernOrigamiApp: React.FC = () => {
         lastFpsTimeRef.current = now;
       }
 
-      // 2. Return the worker's buffer back to worker thread for immediate zero-allocation recycling
+      // 3. Return the worker's buffer back to worker thread for backpressure & zero-allocation recycling
       client.returnBuffer(frameEvent.positions.buffer);
     });
 
@@ -344,9 +351,15 @@ export const ModernOrigamiApp: React.FC = () => {
               <span className="font-mono font-semibold text-gray-700">{latencyMs.toFixed(1)} ms</span>
             </div>
             <div className="flex items-center justify-between space-x-4">
-              <span className="text-gray-500">Physics Tick:</span>
+              <span className="text-gray-500">Step Time:</span>
               <span className="font-mono text-gray-700">
-                {stats?.tickDurationMs ? `${stats.tickDurationMs.toFixed(2)} ms` : '-'}
+                {stats?.stepDurationMs ? `${stats.stepDurationMs.toFixed(2)} ms` : stats?.tickDurationMs ? `${stats.tickDurationMs.toFixed(2)} ms` : '-'}
+              </span>
+            </div>
+            <div className="flex items-center justify-between space-x-4">
+              <span className="text-gray-500">XPBD Passes:</span>
+              <span className="font-mono text-gray-700">
+                {stats?.iterationsPerTick ? `${stats.iterationsPerTick} passes` : '-'}
               </span>
             </div>
           </div>

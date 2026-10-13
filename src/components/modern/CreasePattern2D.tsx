@@ -6,7 +6,7 @@ interface CreasePattern2DProps {
   className?: string;
 }
 
-export const CreasePattern2D: React.FC<CreasePattern2DProps> = ({ fold, className = '' }) => {
+export const CreasePattern2D: React.FC<CreasePattern2DProps> = React.memo(({ fold, className = '' }) => {
   const { bounds, elements } = useMemo(() => {
     if (!fold || !fold.vertices_coords || fold.vertices_coords.length === 0) {
       return {
@@ -196,4 +196,4 @@ export const CreasePattern2D: React.FC<CreasePattern2DProps> = ({ fold, classNam
       </div>
     </div>
   );
-};
+});

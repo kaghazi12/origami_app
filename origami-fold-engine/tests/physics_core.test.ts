@@ -5,6 +5,7 @@ import {
   BarHingeSolver,
   computeDihedralAngle,
   computeMaxBarStrain,
+  assertFinite,
 } from '../../src/engine/physics';
 
 describe('Phase 3: Bar-and-Hinge Mechanical Physics Core', () => {
@@ -34,6 +35,7 @@ describe('Phase 3: Bar-and-Hinge Mechanical Physics Core', () => {
 
     const result = solver.solveToEquilibrium(1500, 1e-5);
     expect(result.converged).toBe(true);
+    assertFinite(mesh);
 
     // 1. Verify final dihedral angle within 1 degree of 90 degrees
     const finalAngleRad = computeDihedralAngle(valleyHinge, mesh.positions);
@@ -75,6 +77,7 @@ describe('Phase 3: Bar-and-Hinge Mechanical Physics Core', () => {
 
     const result = solver.solveToEquilibrium(400, 1e-6);
     expect(result.converged).toBe(true);
+    assertFinite(mesh);
 
     // Verify facet hinge snapped back flat (dihedral angle < 1 degree)
     const finalAngleRad = computeDihedralAngle(facetHinge, mesh.positions);
@@ -99,6 +102,7 @@ describe('Phase 3: Bar-and-Hinge Mechanical Physics Core', () => {
 
     const result = solver.solveToEquilibrium(1200, 1e-4);
     expect(result.converged).toBe(true);
+    assertFinite(mesh);
     expect(solver.getKineticEnergy()).toBeLessThan(1e-4);
   });
 
@@ -139,6 +143,8 @@ describe('Phase 3: Bar-and-Hinge Mechanical Physics Core', () => {
       const totalTimeMs = performance.now() - startTime;
       const msPerStep = totalTimeMs / numBenchmarkSteps;
       const stepsPerFrame60 = Math.floor(targetFrameBudgetMs / msPerStep);
+
+      assertFinite(mesh);
 
       console.log(
         `${tc.name.padEnd(35)} | Vertices: ${String(mesh.numVertices).padStart(4)} | Triangles: ${String(mesh.numTriangles).padStart(4)} | ` +

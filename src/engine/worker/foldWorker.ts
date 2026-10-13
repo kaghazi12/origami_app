@@ -1,18 +1,20 @@
 import { createMeshFromFold, rampRestAngles } from '../mesh/mesh';
 import { BarHingeSolver, computeStableTimeStep, seedFromFlat } from '../physics/solver';
+import { XPBDSolver } from '../physics/xpbd';
+import { FoldSolver } from '../physics/types';
 import { TriMesh } from '../types';
 import { CreaseEdgeInfo, WorkerFrameStats, WorkerRequest, WorkerResponse } from './types';
 
 // State in Worker
 let mesh: TriMesh | null = null;
-let solver: BarHingeSolver | null = null;
+let solver: FoldSolver | null = null;
 let isPaused = false;
 let currentAlpha = 0;
 let targetAlpha = 0;
 let stepCounter = 0;
 let lastPostTime = 0;
 let loopTimer: any = null;
-const TIME_BUDGET_MS = 8.0; // ~8 ms substep budget per tick (~120Hz physics tick)
+let isAwaitingBuffer = false; // Drop-stale / backpressure gate
 
 // Double-buffering recycling pool
 const bufferPool: ArrayBuffer[] = [];
@@ -39,7 +41,7 @@ function startLoop() {
 }
 
 function scheduleNextTick() {
-  loopTimer = setTimeout(runPhysicsTick, 4);
+  loopTimer = setTimeout(runPhysicsTick, 8); // 8 ms interval (~120 Hz maximum physics frequency)
 }
 
 function runPhysicsTick() {
@@ -52,14 +54,14 @@ function runPhysicsTick() {
   let ke = 0;
   let isConverged = false;
 
-  // Adaptive Continuation: advance currentAlpha only as fast as solver keeps strain strictly below 1%
+  // Adaptive Continuation: advance currentAlpha only as fast as solver keeps strain strictly below 4%
   const currentStrain = solver.getMaxStrain();
 
   if (Math.abs(currentAlpha - targetAlpha) > 1e-5) {
-    if (currentStrain < 0.01) {
-      // Scale alpha slew rate based on available strain margin (< 1%)
-      const strainMargin = Math.max(0.1, 1.0 - currentStrain / 0.01);
-      const alphaSlewRate = 0.01 * strainMargin;
+    const strainThreshold = 0.04;
+    if (currentStrain < strainThreshold) {
+      const strainMargin = Math.max(0.1, 1.0 - currentStrain / strainThreshold);
+      const alphaSlewRate = 0.025 * strainMargin;
       if (currentAlpha < targetAlpha) {
         currentAlpha = Math.min(targetAlpha, currentAlpha + alphaSlewRate);
       } else {
@@ -67,67 +69,68 @@ function runPhysicsTick() {
       }
       rampRestAngles(mesh, currentAlpha);
     }
-    // If strain >= 1%, pause alpha advance to allow solver substeps to relax mesh
   }
 
-  // Run dynamic relaxation substeps until time budget is consumed
-  while (performance.now() - tickStart < TIME_BUDGET_MS) {
-    const stepResult = solver.step();
-    pe = stepResult.potentialEnergy;
-    ke = stepResult.kineticEnergy;
-    substeps++;
-    stepCounter++;
+  // Run physics steps for this tick
+  const tStep0 = performance.now();
+  const stepResult = solver.step(0.016);
+  pe = stepResult.potentialEnergy;
+  ke = stepResult.kineticEnergy;
+  substeps = 1;
+  stepCounter++;
+  const stepDurationMs = performance.now() - tStep0;
 
-    const maxResForce = solver.getMaxResidualForce();
-    const targetReached = Math.abs(currentAlpha - targetAlpha) < 1e-4;
-    if (targetReached && maxResForce < 0.005 && ke < 1e-6) {
-      isConverged = true;
-      break;
-    }
+  const maxResForce = solver.getMaxResidualForce();
+  const targetReached = Math.abs(currentAlpha - targetAlpha) < 1e-4;
+  if (targetReached && maxResForce < 0.05 && ke < 1e-7) {
+    isConverged = true;
   }
 
   const tickDurationMs = performance.now() - tickStart;
   const now = performance.now();
   const timeBetweenPostsMs = lastPostTime > 0 ? (now - lastPostTime) : 0;
-  lastPostTime = now;
 
-  // Prepare Float32 transfer buffer
-  const numCoords = mesh.numVertices * 3;
-  const byteLength = numCoords * 4;
-  const ab = getRecycledBuffer(byteLength);
-  const posF32 = new Float32Array(ab);
+  // Drop-Stale Backpressure: only post if main thread has returned previous buffer
+  if (!isAwaitingBuffer) {
+    lastPostTime = now;
+    const numCoords = mesh.numVertices * 3;
+    const byteLength = numCoords * 4;
+    const ab = getRecycledBuffer(byteLength);
+    const posF32 = new Float32Array(ab);
 
-  // Copy Float64 simulation positions into Float32 render buffer
-  for (let i = 0; i < numCoords; i++) {
-    posF32[i] = mesh.positions[i];
+    for (let i = 0; i < numCoords; i++) {
+      posF32[i] = mesh.positions[i];
+    }
+
+    const stats: WorkerFrameStats = {
+      potentialEnergy: pe,
+      kineticEnergy: ke,
+      maxResidualForce: solver.getMaxResidualForce(),
+      maxStrain: solver.getMaxStrain(),
+      converged: isConverged,
+      alpha: currentAlpha,
+      targetAlpha,
+      stepCount: stepCounter,
+      substepsInTick: substeps,
+      iterationsPerTick: 20, // 10 substeps * 2 iterations
+      tickDurationMs,
+      stepDurationMs,
+      postTimestamp: now,
+      timeBetweenPostsMs,
+    };
+
+    const response: WorkerResponse = {
+      type: 'FRAME',
+      positions: posF32,
+      stats,
+    };
+
+    isAwaitingBuffer = true;
+    // Zero-copy transfer of positions buffer
+    (self as unknown as Worker).postMessage(response, [posF32.buffer]);
   }
 
-  const stats: WorkerFrameStats = {
-    potentialEnergy: pe,
-    kineticEnergy: ke,
-    maxResidualForce: solver.getMaxResidualForce(),
-    maxStrain: solver.getMaxStrain(),
-    converged: isConverged,
-    alpha: currentAlpha,
-    targetAlpha,
-    stepCount: stepCounter,
-    substepsInTick: substeps,
-    tickDurationMs,
-    postTimestamp: now,
-    timeBetweenPostsMs,
-  };
-
-  const response: WorkerResponse = {
-    type: 'FRAME',
-    positions: posF32,
-    stats,
-  };
-
-  // Zero-copy transfer of the positions buffer
-  (self as unknown as Worker).postMessage(response, [posF32.buffer]);
-
   // Keep looping if not fully converged or still slewing alpha
-  const targetReached = Math.abs(currentAlpha - targetAlpha) < 1e-4;
   if (!isConverged || !targetReached) {
     scheduleNextTick();
   }
@@ -147,17 +150,22 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
         };
 
         mesh = createMeshFromFold(req.fold, options);
-        solver = new BarHingeSolver(mesh, {
-          kineticDamping: true,
-          massScaling: true,
-          dt: computeStableTimeStep(mesh, 0.4),
+        solver = new XPBDSolver(mesh, {
+          substeps: 10,
+          iterations: 2,
+          velocityDamping: 0.995,
         });
+
+        // Seed microscopic out-of-plane perturbation at center
+        const center = Math.floor(mesh.numVertices / 2);
+        mesh.positions[center * 3 + 2] = 0.01;
 
         currentAlpha = 0;
         targetAlpha = 0;
         stepCounter = 0;
         isPaused = false;
-        bufferPool.length = 0; // reset buffer pool
+        isAwaitingBuffer = false;
+        bufferPool.length = 0;
 
         // Extract crease edges for 3D visualization
         const creaseEdges: CreaseEdgeInfo[] = [];
@@ -225,9 +233,6 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
             if (h.assignment === 'F' || h.assignment === 'U') h.stiffness = req.facetStiffness;
           }
         }
-        if (solver) {
-          solver.dt = computeStableTimeStep(mesh, 0.4);
-        }
         break;
       }
 
@@ -251,6 +256,7 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
           mesh.velocities[i * 3 + 1] = 0;
           mesh.velocities[i * 3 + 2] = 0;
         }
+        isAwaitingBuffer = false;
         startLoop();
         break;
       }
@@ -281,6 +287,11 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
         // Recycle returned array buffer for double-buffering
         if (req.buffer && req.buffer.byteLength > 0 && bufferPool.length < 3) {
           bufferPool.push(req.buffer as ArrayBuffer);
+        }
+        isAwaitingBuffer = false;
+        // If simulation loop was waiting, schedule immediately
+        if (loopTimer === null && (!isPaused && mesh && solver)) {
+          scheduleNextTick();
         }
         break;
       }

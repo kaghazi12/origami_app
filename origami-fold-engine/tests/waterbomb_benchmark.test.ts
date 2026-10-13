@@ -5,6 +5,7 @@ import {
   BarHingeSolver,
   computeMaxBarStrain,
   computeDihedralAngle,
+  assertFinite,
 } from '../../src/engine/physics';
 
 /**
@@ -101,6 +102,7 @@ describe('Phase 4.5 Requirement 6: Rigorous Waterbomb Benchmark & Warm-Start Int
         // solveToEquilibrium without artificial small budget; large cap 6000 steps
         const res = solver.solveToEquilibrium(6000, 1e-6, 0.05);
         stageSteps.push(res.iterations);
+        assertFinite(mesh);
       }
 
       const totalMs = performance.now() - startTime;
@@ -127,16 +129,19 @@ describe('Phase 4.5 Requirement 6: Rigorous Waterbomb Benchmark & Warm-Start Int
       // Starting from converged state at alpha = 0.50, measure steps and time for deltaAlpha = 0.01 and 0.05
       rampRestAngles(mesh, 0.50);
       solver.solveToEquilibrium(6000, 1e-6, 0.05);
+      assertFinite(mesh);
 
       // Warm start deltaAlpha = 0.01 (0.50 -> 0.51)
       const t01 = performance.now();
       rampRestAngles(mesh, 0.51);
       const res01 = solver.solveToEquilibrium(4000, 1e-6, 0.05);
       const ms01 = performance.now() - t01;
+      assertFinite(mesh);
 
       // Reset to 0.50
       rampRestAngles(mesh, 0.50);
       solver.solveToEquilibrium(4000, 1e-6, 0.05);
+      assertFinite(mesh);
 
       // Warm start deltaAlpha = 0.05 (0.50 -> 0.55)
       const t05 = performance.now();

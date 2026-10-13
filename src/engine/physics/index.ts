@@ -9,3 +9,4 @@ export {
   type FoldSolver,
 } from './solver';
 export { XPBDSolver, type XPBDSolverOptions } from './xpbd';
+export { assertFinite, isMeshFinite } from './validation';

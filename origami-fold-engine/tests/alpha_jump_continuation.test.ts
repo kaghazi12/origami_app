@@ -1,17 +1,10 @@
 import { describe, expect, it } from 'vitest';
 import { createWaterbombBasePattern } from '../../src/engine/fold';
 import { createMeshFromFold, rampRestAngles } from '../../src/engine/mesh';
-import { BarHingeSolver } from '../../src/engine/physics';
+import { BarHingeSolver, assertFinite } from '../../src/engine/physics';
 import { TriMesh } from '../../src/engine/types';
 
 describe('Phase 5.5 Requirement 3: Alpha Jumps & Rapid Scrubbing Continuation Tests', () => {
-  function verifyNoNaN(mesh: TriMesh): boolean {
-    for (let i = 0; i < mesh.numVertices * 3; i++) {
-      if (Number.isNaN(mesh.positions[i]) || !Number.isFinite(mesh.positions[i])) return false;
-      if (Number.isNaN(mesh.velocities[i]) || !Number.isFinite(mesh.velocities[i])) return false;
-    }
-    return true;
-  }
 
   it(
     'tests instant jumps (0 -> 1, 1 -> 0) and rapid scrubbing on 121- and 441-vertex meshes',
@@ -66,7 +59,7 @@ describe('Phase 5.5 Requirement 3: Alpha Jumps & Rapid Scrubbing Continuation Te
               solver.step();
             }
 
-            expect(verifyNoNaN(mesh)).toBe(true);
+            assertFinite(mesh);
             const strain = solver.getMaxStrain();
             const force = solver.getMaxResidualForce();
             if (strain > maxObservedStrain) maxObservedStrain = strain;
@@ -81,20 +74,20 @@ describe('Phase 5.5 Requirement 3: Alpha Jumps & Rapid Scrubbing Continuation Te
         expect(resJump0to1.finalAlpha).toBeCloseTo(1.0, 2);
         expect(resJump0to1.maxObservedStrain).toBeLessThan(1.0); // Transient strain bounded (< 100%), no NaN
         expect(resJump0to1.maxObservedForce).toBeLessThan(25000); // Bounded forces (< 25000 N), no NaN/explosion
-        expect(verifyNoNaN(mesh)).toBe(true);
+        assertFinite(mesh);
 
         // 2. Instant jump 1 -> 0
         const resJump1to0 = slewAndStep(60, 0.0);
         expect(resJump1to0.finalAlpha).toBeCloseTo(0.0, 2);
         expect(resJump1to0.maxObservedStrain).toBeLessThan(1.0);
-        expect(verifyNoNaN(mesh)).toBe(true);
+        assertFinite(mesh);
 
         // 3. Rapid back-and-forth scrubbing: 0 -> 0.8 -> 0.2 -> 1.0 -> 0.1 -> 0.7
         const scrubTargets = [0.8, 0.2, 1.0, 0.1, 0.7];
         for (const scrubTarget of scrubTargets) {
           const resScrub = slewAndStep(20, scrubTarget);
           expect(resScrub.maxObservedStrain).toBeLessThan(1.0);
-          expect(verifyNoNaN(mesh)).toBe(true);
+          assertFinite(mesh);
         }
 
         console.log(`[Alpha Jump & Continuation Test - ${tm.name}] Passed without NaN: Max Transient Strain = ${(resJump0to1.maxObservedStrain * 100).toFixed(2)}%, Force = ${resJump0to1.maxObservedForce.toFixed(2)} N.`);

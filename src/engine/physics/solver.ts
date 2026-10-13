@@ -11,6 +11,7 @@ export interface SolverOptions {
 }
 
 import { FoldSolver, SolveResult } from './types';
+import { isMeshFinite } from './validation';
 export { type FoldSolver, type SolveResult };
 
 /**
@@ -304,10 +305,16 @@ export class BarHingeSolver implements FoldSolver {
       const maxResForce = this.getMaxResidualForce();
       const forceConverged = residualForceTol !== undefined && maxResForce < residualForceTol;
       const keConverged = kineticEnergy < kineticTol;
+      const isFinite =
+        Number.isFinite(kineticEnergy) &&
+        Number.isFinite(maxResForce) &&
+        maxResForce < Infinity &&
+        isMeshFinite(this.mesh);
 
       // Convergence check: if residualForceTol is specified, static equilibrium is reached when forces balance.
       // Otherwise, falls back to kinetic energy decay (requiring iter > 2 to avoid false-positive at rest).
-      if (residualForceTol !== undefined ? forceConverged : (iter > 2 && keConverged)) {
+      // A convergence flag must NEVER be set on non-finite state.
+      if (isFinite && (residualForceTol !== undefined ? forceConverged : (iter > 2 && keConverged))) {
         converged = true;
         return {
           iterations: iter + 1,
@@ -319,11 +326,18 @@ export class BarHingeSolver implements FoldSolver {
       }
     }
 
+    const finalResForce = this.getMaxResidualForce();
+    const isFiniteFinal =
+      Number.isFinite(finalKe) &&
+      Number.isFinite(finalResForce) &&
+      finalResForce < Infinity &&
+      isMeshFinite(this.mesh);
+
     return {
       iterations: maxIterations,
-      converged,
+      converged: converged && isFiniteFinal,
       kineticEnergy: finalKe,
-      maxResidualForce: this.getMaxResidualForce(),
+      maxResidualForce: finalResForce,
       maxStrain: this.getMaxStrain(),
     };
   }

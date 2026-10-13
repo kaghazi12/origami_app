@@ -10,6 +10,7 @@ import {
   XPBDSolver,
   computeDihedralAngle,
   FoldSolver,
+  assertFinite,
 } from '../../src/engine/physics';
 import { TriMesh } from '../../src/engine/types';
 
@@ -106,6 +107,8 @@ describe('Phase 5.6: XPBD Solver Spike & Corrected Drag Benchmark Suite', () => 
 
       expect(meshDR.numVertices).toBe(tc.expectedV);
       expect(meshXPBD.numVertices).toBe(tc.expectedV);
+      assertFinite(meshDR);
+      assertFinite(meshXPBD);
       expect(strainXPBD).toBeLessThan(1.0); // XPBD enforces exact inextensibility: strain < 1%!
       expect(Number.isFinite(resXPBD.maxResidualForce)).toBe(true);
     }
@@ -166,6 +169,8 @@ describe('Phase 5.6: XPBD Solver Spike & Corrected Drag Benchmark Suite', () => 
     console.log(`XPBD Solver: Width=${bboxXPBD.width.toFixed(4)}, Length=${bboxXPBD.length.toFixed(4)}, Height=${bboxXPBD.height.toFixed(4)}, MaxStrain=${(solverXPBD.getMaxStrain()*100).toFixed(4)}%, Time=${msXPBD.toFixed(1)}ms`);
     console.log('======================================================================================================================\n');
 
+    assertFinite(meshDR);
+    assertFinite(meshXPBD);
     expect(solverXPBD.getMaxStrain()).toBeLessThan(0.001); // XPBD strain < 0.1%
     expect(bboxXPBD.height).toBeGreaterThan(0.05); // Deformed into 3D corrugation
     expect(Math.abs(bboxDR.width - bboxXPBD.width)).toBeLessThan(0.05); // Both solvers agree on 3D dimensions
@@ -263,6 +268,8 @@ describe('Phase 5.6: XPBD Solver Spike & Corrected Drag Benchmark Suite', () => 
 
         expect(errDR).toBeLessThan(1e-6);
         expect(errXPBD).toBeLessThan(1e-6);
+        assertFinite(meshDR);
+        assertFinite(meshXPBD);
         expect(strainXPBD).toBeLessThan(1.0); // XPBD keeps strain < 1% during buckling and arc sweep!
       }
     }
@@ -299,7 +306,7 @@ describe('Phase 5.6: XPBD Solver Spike & Corrected Drag Benchmark Suite', () => 
       const str = solverXPBD.getMaxStrain();
       if (str > maxStrainXPBD) maxStrainXPBD = str;
     }
-    console.log(`\n[XPBD Instant Jump 0 -> 1.0]: Max Transient Strain = ${(maxStrainXPBD * 100).toFixed(4)}% (Eliminated 52-66% DR strain!)`);
+    assertFinite(meshXPBD);
     expect(maxStrainXPBD).toBeLessThan(0.10); // Instant jump strain reduced 10x from DR's 52-66% down to 5.6%!
 
     // 2. DR Adaptive Continuation (smoothly meters alpha advance to preserve strain < 1%)
@@ -326,6 +333,8 @@ describe('Phase 5.6: XPBD Solver Spike & Corrected Drag Benchmark Suite', () => 
         solver.step();
       }
     }
+
+    assertFinite(mesh);
 
     console.log(`[DR Adaptive Continuation Results]:`);
     console.log(`  Target Alpha: ${targetAlpha.toFixed(2)}, Final Achieved Alpha: ${currentAlpha.toFixed(2)}`);

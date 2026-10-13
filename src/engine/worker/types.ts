@@ -47,7 +47,9 @@ export interface WorkerFrameStats {
   targetAlpha?: number;
   stepCount: number;
   substepsInTick: number;
+  iterationsPerTick?: number;
   tickDurationMs: number;
+  stepDurationMs?: number;
   postTimestamp?: number;
   timeBetweenPostsMs?: number;
 }

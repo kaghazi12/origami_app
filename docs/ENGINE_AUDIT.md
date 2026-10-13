@@ -499,8 +499,12 @@ In accordance with the instruction: *"Do not claim something works unless a test
 
 ---
 
-## 6. Current Status & Next Actions
+## 6. Current Status & Phase 5.7 Transition Note
 
-- **Task Status:** Audit complete. `docs/ENGINE_AUDIT.md` produced.
-- **Code State:** No code has been modified yet.
-- **Awaiting User Review:** Ready for user review and approval before beginning Phase 1.
+> [!WARNING]
+> **Phase 4.6 Kinetic Damping & Barnes DR Results Marked INVALID (NaN False Convergence)**
+> In Phase 4.6, Dynamic Relaxation with Kinetic Damping and Barnes fictitious mass scaling appeared to converge in 7 steps with ~0 N residual force. That result was an invalid **false-convergence artifact**: when coordinates blew up into `NaN`, `maxResidualForce` evaluated `NaN > 0` as `false`, erroneously marking the solver as converged on non-finite coordinates.
+> In Phase 5.7:
+> 1. A shared strict verification helper `assertFinite(mesh)` was added to the physics engine and called across all solver tests.
+> 2. `solveToEquilibrium` is guarded so that a convergence flag can NEVER be set on non-finite state (`Number.isFinite(resForce)` and `isMeshFinite(mesh)` required).
+> 3. The engine has transitioned to **Small-Step XPBD (Extended Position-Based Dynamics, Macklin et al. 2019)** with hard distance constraints ($\alpha=0$), which is unconditionally stable, completely eliminates axial bar elongation without time step instability, and executes at 0.6–3.7 ms per step on 121V and 441V meshes.

@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import { createWaterbombBasePattern } from '../../src/engine/fold';
 import { createMeshFromFold } from '../../src/engine/mesh';
-import { BarHingeSolver, computeDihedralAngle } from '../../src/engine/physics';
+import { BarHingeSolver, computeDihedralAngle, assertFinite } from '../../src/engine/physics';
 import { TriMesh } from '../../src/engine/types';
 
 describe('Phase 4.6 & 5.5 Requirement 4: Convergence Audit & Dynamic Relaxation Benchmarks', () => {
