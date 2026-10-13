@@ -95,11 +95,43 @@ export class OrigamiWorkerClient {
     }
   }
 
-  load(fold: FoldFormat, meshOptions?: MeshOptions): void {
+  load(
+    fold: FoldFormat,
+    meshOptions?: MeshOptions,
+    solverOptions?: {
+      enableTable?: boolean;
+      tableZ?: number;
+      paperThickness?: number;
+      enableGravity?: boolean;
+      gravity?: number;
+      muStatic?: number;
+      muKinetic?: number;
+      bendingCompliance?: number;
+      substeps?: number;
+    }
+  ): void {
     this.postMessage({
       type: 'LOAD',
       fold,
       meshOptions,
+      solverOptions,
+    });
+  }
+
+  setPhysicsParams(params: {
+    enableTable?: boolean;
+    tableZ?: number;
+    paperThickness?: number;
+    enableGravity?: boolean;
+    gravity?: number;
+    muStatic?: number;
+    muKinetic?: number;
+    bendingCompliance?: number;
+    substeps?: number;
+  }): void {
+    this.postMessage({
+      type: 'SET_PHYSICS_PARAMS',
+      ...params,
     });
   }
 

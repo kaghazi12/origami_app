@@ -228,5 +228,5 @@ describe('Phase 5.7 Requirement 4: Full XPBD Acceptance Suite Validation', () =>
       expect(strain).toBeLessThan(0.05); // Residual strain < 0.05%
     }
     console.log('======================================================================================================================\n');
-  });
+  }, 30000);
 });

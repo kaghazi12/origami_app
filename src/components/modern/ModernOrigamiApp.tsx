@@ -19,17 +19,20 @@ import {
   createMiuraOriPattern,
   createWaterbombBasePattern,
   createPreliminaryBasePattern,
+  createSquareSheet,
 } from '../../engine/fold/templates';
 
 const SAMPLES = [
-  { id: 'miura', name: 'Miura-ori (3x3, gamma=60°)', creator: () => createMiuraOriPattern(3, 3, 1, 1, 60) },
-  { id: 'waterbomb', name: 'Waterbomb Base (Dual 8-Line)', creator: () => createWaterbombBasePattern(1) },
-  { id: 'preliminary', name: 'Preliminary Base (Dual 8-Line)', creator: () => createPreliminaryBasePattern(1) },
+  { id: 'flat', name: 'Flat Sheet on Table', creator: () => createSquareSheet(1, 1) },
+  { id: 'miura', name: 'Miura-ori (3x3)', creator: () => createMiuraOriPattern(3, 3, 1, 1, 60) },
+  { id: 'waterbomb', name: 'Waterbomb Base', creator: () => createWaterbombBasePattern(1) },
+  { id: 'preliminary', name: 'Preliminary Base', creator: () => createPreliminaryBasePattern(1) },
 ];
 
 export const ModernOrigamiApp: React.FC = () => {
-  const [selectedSampleId, setSelectedSampleId] = useState<string>('miura');
-  const [currentFold, setCurrentFold] = useState<FoldFormat>(() => createMiuraOriPattern(3, 3, 1, 1, 60));
+  const [selectedSampleId, setSelectedSampleId] = useState<string>('flat');
+  const [currentFold, setCurrentFold] = useState<FoldFormat>(() => createSquareSheet(1, 1));
+  const [meshDensity, setMeshDensity] = useState<'121' | '441'>('121');
 
   // Mesh & Physics state from Worker
   const [loadedInfo, setLoadedInfo] = useState<LoadedMeshInfo | null>(null);
@@ -46,6 +49,16 @@ export const ModernOrigamiApp: React.FC = () => {
   const [axialStiffness, setAxialStiffness] = useState<number>(40000);
   const [creaseStiffness, setCreaseStiffness] = useState<number>(40);
   const [facetStiffness, setFacetStiffness] = useState<number>(200);
+
+  // Phase 6: Table contact, Coulomb friction, gravity & paper stiffness
+  const [enableTable, setEnableTable] = useState<boolean>(true);
+  const [paperThickness, setPaperThickness] = useState<number>(0.002);
+  const [enableGravity, setEnableGravity] = useState<boolean>(true);
+  const [gravity, setGravity] = useState<number>(1.0);
+  const [muStatic, setMuStatic] = useState<number>(0.5);
+  const [muKinetic, setMuKinetic] = useState<number>(0.4);
+  const [paperStiffnessPreset, setPaperStiffnessPreset] = useState<number>(50); // 0 (tissue) to 100 (card)
+  const [substepsPerFrame, setSubstepsPerFrame] = useState<number>(10);
 
   // Performance telemetry
   const [fps, setFps] = useState<number>(60);
@@ -152,11 +165,28 @@ export const ModernOrigamiApp: React.FC = () => {
     });
 
     // Load initial model
-    client.load(currentFold, {
-      axialStiffness,
-      creaseStiffness,
-      facetStiffness,
-    });
+    const targetEdgeLength = meshDensity === '441' ? 0.05 : 0.10;
+    const bendingCompliance = 0.05 * Math.pow(10, -4 * (paperStiffnessPreset / 100));
+    client.load(
+      currentFold,
+      {
+        axialStiffness,
+        creaseStiffness,
+        facetStiffness,
+        targetEdgeLength,
+      },
+      {
+        enableTable,
+        tableZ: 0.0,
+        paperThickness,
+        enableGravity,
+        gravity,
+        muStatic,
+        muKinetic,
+        bendingCompliance,
+        substeps: substepsPerFrame,
+      }
+    );
 
     return () => {
       client.terminate();
@@ -165,16 +195,68 @@ export const ModernOrigamiApp: React.FC = () => {
   }, []);
 
   // Handle load model
-  const loadFoldModel = useCallback((fold: FoldFormat) => {
+  const loadFoldModel = useCallback((fold: FoldFormat, density = meshDensity) => {
     setCurrentFold(fold);
     setAlpha(0);
     setIsPlaying(false);
-    clientRef.current?.load(fold, {
-      axialStiffness,
-      creaseStiffness,
-      facetStiffness,
+    const targetEdgeLength = density === '441' ? 0.05 : 0.10;
+    const bendingCompliance = 0.05 * Math.pow(10, -4 * (paperStiffnessPreset / 100));
+    clientRef.current?.load(
+      fold,
+      {
+        axialStiffness,
+        creaseStiffness,
+        facetStiffness,
+        targetEdgeLength,
+      },
+      {
+        enableTable,
+        tableZ: 0.0,
+        paperThickness,
+        enableGravity,
+        gravity,
+        muStatic,
+        muKinetic,
+        bendingCompliance,
+        substeps: substepsPerFrame,
+      }
+    );
+  }, [axialStiffness, creaseStiffness, facetStiffness, meshDensity, paperStiffnessPreset, enableTable, paperThickness, enableGravity, gravity, muStatic, muKinetic, substepsPerFrame]);
+
+  // Handle physics parameter updates to worker
+  const updatePhysicsParams = (params: {
+    enableTable?: boolean;
+    paperThickness?: number;
+    enableGravity?: boolean;
+    gravity?: number;
+    muStatic?: number;
+    muKinetic?: number;
+    paperStiffnessPreset?: number;
+    substepsPerFrame?: number;
+  }) => {
+    if (params.enableTable !== undefined) setEnableTable(params.enableTable);
+    if (params.paperThickness !== undefined) setPaperThickness(params.paperThickness);
+    if (params.enableGravity !== undefined) setEnableGravity(params.enableGravity);
+    if (params.gravity !== undefined) setGravity(params.gravity);
+    if (params.muStatic !== undefined) setMuStatic(params.muStatic);
+    if (params.muKinetic !== undefined) setMuKinetic(params.muKinetic);
+    if (params.paperStiffnessPreset !== undefined) setPaperStiffnessPreset(params.paperStiffnessPreset);
+    if (params.substepsPerFrame !== undefined) setSubstepsPerFrame(params.substepsPerFrame);
+
+    const preset = params.paperStiffnessPreset ?? paperStiffnessPreset;
+    const compliance = 0.05 * Math.pow(10, -4 * (preset / 100));
+
+    clientRef.current?.setPhysicsParams({
+      enableTable: params.enableTable ?? enableTable,
+      paperThickness: params.paperThickness ?? paperThickness,
+      enableGravity: params.enableGravity ?? enableGravity,
+      gravity: params.gravity ?? gravity,
+      muStatic: params.muStatic ?? muStatic,
+      muKinetic: params.muKinetic ?? muKinetic,
+      bendingCompliance: compliance,
+      substeps: params.substepsPerFrame ?? substepsPerFrame,
     });
-  }, [axialStiffness, creaseStiffness, facetStiffness]);
+  };
 
   // Handle Alpha slider change
   const handleAlphaChange = (newAlpha: number) => {
@@ -288,6 +370,32 @@ export const ModernOrigamiApp: React.FC = () => {
 
         {/* Model Presets & File Picker */}
         <div className="flex items-center space-x-2">
+          {/* Mesh Density Selector */}
+          <div className="flex items-center space-x-1 bg-gray-100 p-0.5 rounded-md border border-gray-200 mr-2">
+            <button
+              onClick={() => {
+                setMeshDensity('121');
+                loadFoldModel(currentFold, '121');
+              }}
+              className={`px-2 py-1 text-xs font-semibold rounded transition-colors ${
+                meshDensity === '121' ? 'bg-white shadow-sm text-indigo-600' : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              121 V
+            </button>
+            <button
+              onClick={() => {
+                setMeshDensity('441');
+                loadFoldModel(currentFold, '441');
+              }}
+              className={`px-2 py-1 text-xs font-semibold rounded transition-colors ${
+                meshDensity === '441' ? 'bg-white shadow-sm text-indigo-600' : 'text-gray-600 hover:text-gray-900'
+              }`}
+            >
+              441 V
+            </button>
+          </div>
+
           {SAMPLES.map((sample) => (
             <button
               key={sample.id}
@@ -337,6 +445,8 @@ export const ModernOrigamiApp: React.FC = () => {
             positions={positions}
             creaseEdges={loadedInfo?.creaseEdges ?? []}
             showCreases={showCreases}
+            showTable={enableTable}
+            paperThickness={paperThickness}
             className="h-full"
           />
 
@@ -462,54 +572,124 @@ export const ModernOrigamiApp: React.FC = () => {
         </div>
       </div>
 
-      {/* Physics Tuning Accordion Drawer */}
-      <div className="bg-gray-50 border-t border-gray-200 px-6 py-2 flex items-center justify-between text-xs text-gray-600">
-        <div className="flex items-center space-x-6">
-          <div className="flex items-center space-x-2">
-            <span>k_axial:</span>
+      {/* Physics & Table Debug Panel Drawer */}
+      <div className="bg-gray-50 border-t border-gray-200 px-6 py-2.5 flex flex-wrap items-center justify-between gap-y-2 text-xs text-gray-600">
+        <div className="flex flex-wrap items-center gap-x-5 gap-y-2">
+          {/* Table Toggle */}
+          <label className="flex items-center space-x-1.5 cursor-pointer font-medium text-gray-700">
+            <input
+              type="checkbox"
+              checked={enableTable}
+              onChange={(e) => updatePhysicsParams({ enableTable: e.target.checked })}
+              className="rounded text-indigo-600 focus:ring-indigo-500"
+            />
+            <span>Table (z=0)</span>
+          </label>
+
+          {/* Thickness */}
+          <div className="flex items-center space-x-1.5">
+            <span className="text-gray-500">Thickness:</span>
             <input
               type="range"
-              min={5000}
-              max={80000}
-              step={5000}
-              value={axialStiffness}
-              onChange={(e) => handleStiffnessUpdate(parseFloat(e.target.value), creaseStiffness, facetStiffness)}
-              className="w-20 h-1.5 bg-gray-200 rounded accent-indigo-600 cursor-pointer"
+              min={0.0005}
+              max={0.008}
+              step={0.0005}
+              value={paperThickness}
+              onChange={(e) => updatePhysicsParams({ paperThickness: parseFloat(e.target.value) })}
+              className="w-16 h-1.5 bg-gray-200 rounded accent-indigo-600 cursor-pointer"
             />
-            <span className="font-mono">{axialStiffness}</span>
+            <span className="font-mono text-[11px]">{(paperThickness * 1000).toFixed(1)}mm</span>
           </div>
 
-          <div className="flex items-center space-x-2">
-            <span>k_crease:</span>
+          {/* Gravity */}
+          <div className="flex items-center space-x-1.5">
+            <label className="flex items-center space-x-1 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={enableGravity}
+                onChange={(e) => updatePhysicsParams({ enableGravity: e.target.checked })}
+                className="rounded text-indigo-600"
+              />
+              <span className="text-gray-500">Gravity:</span>
+            </label>
+            <input
+              type="range"
+              min={0}
+              max={9.8}
+              step={0.5}
+              value={gravity}
+              onChange={(e) => updatePhysicsParams({ gravity: parseFloat(e.target.value) })}
+              className="w-14 h-1.5 bg-gray-200 rounded accent-indigo-600 cursor-pointer"
+            />
+            <span className="font-mono text-[11px]">{gravity.toFixed(1)}</span>
+          </div>
+
+          {/* mu_static */}
+          <div className="flex items-center space-x-1.5">
+            <span className="text-gray-500">μ_static:</span>
+            <input
+              type="range"
+              min={0}
+              max={1.0}
+              step={0.05}
+              value={muStatic}
+              onChange={(e) => updatePhysicsParams({ muStatic: parseFloat(e.target.value) })}
+              className="w-12 h-1.5 bg-gray-200 rounded accent-indigo-600 cursor-pointer"
+            />
+            <span className="font-mono text-[11px]">{muStatic.toFixed(2)}</span>
+          </div>
+
+          {/* mu_kinetic */}
+          <div className="flex items-center space-x-1.5">
+            <span className="text-gray-500">μ_kinetic:</span>
+            <input
+              type="range"
+              min={0}
+              max={1.0}
+              step={0.05}
+              value={muKinetic}
+              onChange={(e) => updatePhysicsParams({ muKinetic: parseFloat(e.target.value) })}
+              className="w-12 h-1.5 bg-gray-200 rounded accent-indigo-600 cursor-pointer"
+            />
+            <span className="font-mono text-[11px]">{muKinetic.toFixed(2)}</span>
+          </div>
+
+          {/* Paper Stiffness Preset Slider */}
+          <div className="flex items-center space-x-1.5">
+            <span className="text-gray-500">Stiffness:</span>
+            <input
+              type="range"
+              min={0}
+              max={100}
+              step={1}
+              value={paperStiffnessPreset}
+              onChange={(e) => updatePhysicsParams({ paperStiffnessPreset: parseInt(e.target.value, 10) })}
+              className="w-16 h-1.5 bg-gray-200 rounded accent-indigo-600 cursor-pointer"
+              title="Tissue (0) to Card (100)"
+            />
+            <span className="font-mono text-[11px] font-medium text-indigo-700">
+              {paperStiffnessPreset < 35 ? 'Tissue' : paperStiffnessPreset < 70 ? 'Standard' : 'Card'}
+            </span>
+          </div>
+
+          {/* Substeps */}
+          <div className="flex items-center space-x-1.5">
+            <span className="text-gray-500">Substeps:</span>
             <input
               type="range"
               min={5}
-              max={150}
-              step={5}
-              value={creaseStiffness}
-              onChange={(e) => handleStiffnessUpdate(axialStiffness, parseFloat(e.target.value), facetStiffness)}
-              className="w-20 h-1.5 bg-gray-200 rounded accent-indigo-600 cursor-pointer"
+              max={25}
+              step={1}
+              value={substepsPerFrame}
+              onChange={(e) => updatePhysicsParams({ substepsPerFrame: parseInt(e.target.value, 10) })}
+              className="w-12 h-1.5 bg-gray-200 rounded accent-indigo-600 cursor-pointer"
             />
-            <span className="font-mono">{creaseStiffness}</span>
-          </div>
-
-          <div className="flex items-center space-x-2">
-            <span>k_facet:</span>
-            <input
-              type="range"
-              min={20}
-              max={600}
-              step={20}
-              value={facetStiffness}
-              onChange={(e) => handleStiffnessUpdate(axialStiffness, creaseStiffness, parseFloat(e.target.value))}
-              className="w-20 h-1.5 bg-gray-200 rounded accent-indigo-600 cursor-pointer"
-            />
-            <span className="font-mono">{facetStiffness}</span>
+            <span className="font-mono text-[11px]">{substepsPerFrame}</span>
           </div>
         </div>
 
-        <div className="text-gray-400">
-          Double-Buffering Zero-Copy | Pure TS Engine
+        <div className="text-gray-400 text-[11px]">
+          Table XPBD Contact | Coulomb Friction
         </div>
       </div>
     </div>

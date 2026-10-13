@@ -9,6 +9,17 @@ export interface XPBDSolverOptions {
   iterations?: number;
   velocityDamping?: number;
   fixedVertices?: Set<number>;
+  
+  // Phase 6: Table contact & real paper behavior
+  enableTable?: boolean;
+  tableZ?: number;
+  paperThickness?: number;
+  enableGravity?: boolean;
+  gravity?: number;
+  muStatic?: number;
+  muKinetic?: number;
+  bendingCompliance?: number;
+  contactDamping?: number;
 }
 
 /**
@@ -20,6 +31,8 @@ export interface XPBDSolverOptions {
  * - Flat Typed Arrays: Zero object allocations, zero hash lookups (Set.has/Map.has replaced by Float64Array invMass).
  * - Consolidated Dihedral Constraint: Unified dihedral angle & gradient calculation in a single pass.
  * - Exact Inextensibility: Final bar distance projection guarantees max bar strain < 0.01% (compliance alpha = 0).
+ * - Phase 6 Real Paper Physics: One-sided table plane contact constraint (z >= paperThickness/2),
+ *   Coulomb position-based static & kinetic friction, gravity, and tunable facet bending compliance.
  */
 export class XPBDSolver implements FoldSolver {
   readonly mesh: TriMesh;
@@ -28,6 +41,17 @@ export class XPBDSolver implements FoldSolver {
   substeps: number;
   iterations: number;
   velocityDamping: number;
+
+  // Phase 6 properties
+  enableTable: boolean;
+  tableZ: number;
+  paperThickness: number;
+  enableGravity: boolean;
+  gravity: number;
+  muStatic: number;
+  muKinetic: number;
+  bendingCompliance: number | undefined;
+  contactDamping: number;
 
   // Flattened constraint topology arrays for cache-friendly execution
   private numBars: number;
@@ -42,6 +66,7 @@ export class XPBDSolver implements FoldSolver {
   private hingeV3: Int32Array;
   private hingeStiffness: Float64Array;
   private hingeRestAngle: Float64Array;
+  private hingeIsFacet: Uint8Array;
 
   // Precomputed inverse nodal masses (0 for pinned/dragged vertices)
   private invMass: Float64Array;
@@ -62,7 +87,27 @@ export class XPBDSolver implements FoldSolver {
     this.iterations = options.iterations ?? 1;
     this.velocityDamping = options.velocityDamping ?? 0.995;
 
+    // Phase 6: Real paper table contact, friction, gravity and bending compliance
+    this.enableTable = options.enableTable ?? false;
+    this.tableZ = options.tableZ ?? 0.0;
+
     const numV = mesh.numVertices;
+    let minX = Infinity, maxX = -Infinity;
+    for (let i = 0; i < numV; i++) {
+      const x = mesh.positions[i * 3 + 0];
+      if (x < minX) minX = x;
+      if (x > maxX) maxX = x;
+    }
+    const sheetWidth = (maxX > minX && Number.isFinite(maxX - minX)) ? (maxX - minX) : 1.0;
+    this.paperThickness = options.paperThickness ?? (sheetWidth * 0.002);
+
+    this.enableGravity = options.enableGravity ?? false;
+    this.gravity = options.gravity ?? 1.0;
+    this.muStatic = options.muStatic ?? 0.5;
+    this.muKinetic = options.muKinetic ?? 0.4;
+    this.bendingCompliance = options.bendingCompliance;
+    this.contactDamping = options.contactDamping ?? 0.2;
+
     this.posStar = new Float64Array(numV * 3);
     this.forcesBuffer = new Float64Array(numV * 3);
     this.invMass = new Float64Array(numV);
@@ -88,6 +133,7 @@ export class XPBDSolver implements FoldSolver {
     this.hingeV3 = new Int32Array(this.numHinges);
     this.hingeStiffness = new Float64Array(this.numHinges);
     this.hingeRestAngle = new Float64Array(this.numHinges);
+    this.hingeIsFacet = new Uint8Array(this.numHinges);
     this.lambdaHinges = new Float64Array(this.numHinges);
 
     for (let h = 0; h < this.numHinges; h++) {
@@ -98,6 +144,8 @@ export class XPBDSolver implements FoldSolver {
       this.hingeV3[h] = hinge.v3;
       this.hingeStiffness[h] = hinge.stiffness;
       this.hingeRestAngle[h] = hinge.restAngle;
+      const assign = hinge.assignment;
+      this.hingeIsFacet[h] = (assign === 'F' || assign === 'U') ? 1 : 0;
     }
 
     this.rebuildInverseMasses();
@@ -145,6 +193,40 @@ export class XPBDSolver implements FoldSolver {
     return this.invMass[v] === 0.0;
   }
 
+  setTable(enable: boolean, thickness?: number, tableZ?: number): void {
+    this.enableTable = enable;
+    if (thickness !== undefined) this.paperThickness = thickness;
+    if (tableZ !== undefined) this.tableZ = tableZ;
+  }
+
+  setFriction(muStatic: number, muKinetic: number, contactDamping?: number): void {
+    this.muStatic = muStatic;
+    this.muKinetic = muKinetic;
+    if (contactDamping !== undefined) this.contactDamping = contactDamping;
+  }
+
+  setGravity(enable: boolean, g?: number): void {
+    this.enableGravity = enable;
+    if (g !== undefined) this.gravity = g;
+  }
+
+  setBendingCompliance(compliance: number | undefined): void {
+    this.bendingCompliance = compliance;
+  }
+
+  setPaperStiffness(preset: 'tissue' | 'standard' | 'card' | number): void {
+    if (preset === 'tissue') {
+      this.bendingCompliance = 0.05;
+    } else if (preset === 'standard') {
+      this.bendingCompliance = 0.001;
+    } else if (preset === 'card') {
+      this.bendingCompliance = 0.00001;
+    } else if (typeof preset === 'number') {
+      const clamped = Math.max(0, Math.min(100, preset));
+      this.bendingCompliance = 0.05 * Math.pow(10, -4 * (clamped / 100));
+    }
+  }
+
   /**
    * Synchronizes hinge rest angles from mesh elements if modified externally
    */
@@ -184,7 +266,9 @@ export class XPBDSolver implements FoldSolver {
     const hingeRestAngle = this.hingeRestAngle;
 
     for (let s = 0; s < substepCount; s++) {
-      // 1. Predict unconstrained positions
+      // 1. Predict unconstrained positions (with gravity external force if enabled)
+      const gAcc = this.enableGravity ? this.gravity : 0.0;
+
       for (let i = 0; i < numV; i++) {
         const i3 = i * 3;
         const w = invMass[i];
@@ -205,7 +289,7 @@ export class XPBDSolver implements FoldSolver {
         } else {
           posStar[i3 + 0] = pos[i3 + 0] + h * vel[i3 + 0];
           posStar[i3 + 1] = pos[i3 + 1] + h * vel[i3 + 1];
-          posStar[i3 + 2] = pos[i3 + 2] + h * vel[i3 + 2];
+          posStar[i3 + 2] = pos[i3 + 2] + h * vel[i3 + 2] - gAcc * hSq;
         }
       }
 
@@ -219,7 +303,7 @@ export class XPBDSolver implements FoldSolver {
         // Projected first so that distance constraints enforce strict inextensibility at the end
         for (let hi = 0; hi < numHinges; hi++) {
           const kH = hingeStiffness[hi];
-          if (kH <= 0) continue;
+          if (kH <= 0 && this.bendingCompliance === undefined) continue;
 
           const i0 = hingeV0[hi];
           const i1 = hingeV1[hi];
@@ -233,6 +317,7 @@ export class XPBDSolver implements FoldSolver {
           if (w0 + w1 + w2 + w3 === 0.0) continue;
 
           const p0 = i0 * 3, p1 = i1 * 3, p2 = i2 * 3, p3 = i3 * 3;
+
           const ex = posStar[p1 + 0] - posStar[p0 + 0];
           const ey = posStar[p1 + 1] - posStar[p0 + 1];
           const ez = posStar[p1 + 2] - posStar[p0 + 2];
@@ -301,8 +386,11 @@ export class XPBDSolver implements FoldSolver {
           const wGradSum = w0 * gradLenSq0 + w1 * gradLenSq1 + w2 * gradLenSq2 + w3 * gradLenSq3;
           if (wGradSum < 1e-12) continue;
 
-          // XPBD compliance: alphaTilde = (1 / kH) / h^2
-          const alphaTilde = (1.0 / kH) / hSq;
+          // XPBD compliance: alphaTilde = alpha / h^2
+          const alphaTilde = (this.bendingCompliance !== undefined && this.hingeIsFacet[hi] === 1)
+            ? (this.bendingCompliance / hSq)
+            : ((1.0 / kH) / hSq);
+
           const deltaLambda = (-C - alphaTilde * this.lambdaHinges[hi]) / (wGradSum + alphaTilde);
           this.lambdaHinges[hi] += deltaLambda;
 
@@ -332,7 +420,40 @@ export class XPBDSolver implements FoldSolver {
           }
         }
 
-        // --- B. Distance Constraints (Axial Bars - exact inextensibility alpha = 0) ---
+        // --- B. Table Plane Contact & Coulomb Friction Constraint (z >= tableZ + paperThickness / 2) ---
+        if (this.enableTable) {
+          const zContact = this.tableZ + this.paperThickness * 0.5;
+          for (let i = 0; i < numV; i++) {
+            const w = invMass[i];
+            if (w === 0.0) continue;
+            const i3 = i * 3;
+            const zPred = posStar[i3 + 2];
+            if (zPred < zContact) {
+              const deltaZ = zContact - zPred;
+              posStar[i3 + 2] = zContact;
+
+              // Tangential motion over this substep
+              const dx = posStar[i3 + 0] - pos[i3 + 0];
+              const dy = posStar[i3 + 1] - pos[i3 + 1];
+              const dTangent = Math.hypot(dx, dy);
+
+              if (dTangent > 1e-12) {
+                if (dTangent <= this.muStatic * deltaZ) {
+                  // Static friction arrest
+                  posStar[i3 + 0] = pos[i3 + 0];
+                  posStar[i3 + 1] = pos[i3 + 1];
+                } else {
+                  // Kinetic friction reduction in proportion to contact normal correction
+                  const reduction = Math.min(1.0, (this.muKinetic * deltaZ) / dTangent);
+                  posStar[i3 + 0] -= dx * reduction;
+                  posStar[i3 + 1] -= dy * reduction;
+                }
+              }
+            }
+          }
+        }
+
+        // --- C. Distance Constraints (Axial Bars - exact inextensibility alpha = 0) ---
         // Running bars last in each iteration eliminates residual strain from bending projections
         for (let b = 0; b < numBars; b++) {
           const v0 = barV0[b];
@@ -373,6 +494,8 @@ export class XPBDSolver implements FoldSolver {
 
       // 3. Update velocities and commit positions
       const damp = this.velocityDamping;
+      const zContact = this.enableTable ? (this.tableZ + this.paperThickness * 0.5) : -Infinity;
+
       for (let i = 0; i < numV; i++) {
         const i3 = i * 3;
         if (invMass[i] === 0.0) {
@@ -386,6 +509,16 @@ export class XPBDSolver implements FoldSolver {
           vel[i3 + 0] = (posStar[i3 + 0] - pos[i3 + 0]) * invH * damp;
           vel[i3 + 1] = (posStar[i3 + 1] - pos[i3 + 1]) * invH * damp;
           vel[i3 + 2] = (posStar[i3 + 2] - pos[i3 + 2]) * invH * damp;
+
+          // Contact velocity damping and non-penetration enforcement
+          if (this.enableTable && posStar[i3 + 2] <= zContact + 1e-7) {
+            if (vel[i3 + 2] < 0) {
+              vel[i3 + 2] = 0; // Inelastic normal collision
+            }
+            vel[i3 + 0] *= (1.0 - this.contactDamping);
+            vel[i3 + 1] *= (1.0 - this.contactDamping);
+          }
+
           pos[i3 + 0] = posStar[i3 + 0];
           pos[i3 + 1] = posStar[i3 + 1];
           pos[i3 + 2] = posStar[i3 + 2];
@@ -420,6 +553,17 @@ export class XPBDSolver implements FoldSolver {
     this.forcesBuffer.fill(0);
     accumulateBarForces(this.mesh.bars, this.mesh.positions, this.forcesBuffer);
     accumulateHingeForces(this.mesh.hinges, this.mesh.positions, this.forcesBuffer);
+
+    if (this.enableGravity) {
+      const zContact = this.enableTable ? (this.tableZ + this.paperThickness * 0.5) : -Infinity;
+      for (let i = 0; i < this.mesh.numVertices; i++) {
+        if (this.isConstrained(i)) continue;
+        const i3 = i * 3;
+        if (this.mesh.positions[i3 + 2] > zContact + 1e-5) {
+          this.forcesBuffer[i3 + 2] -= this.mesh.masses[i] * this.gravity;
+        }
+      }
+    }
 
     let maxForce = 0;
     for (let i = 0; i < this.mesh.numVertices; i++) {

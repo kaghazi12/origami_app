@@ -150,10 +150,19 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
         };
 
         mesh = createMeshFromFold(req.fold, options);
+        const sOpts = req.solverOptions ?? {};
         solver = new XPBDSolver(mesh, {
-          substeps: 10,
+          substeps: sOpts.substeps ?? 10,
           iterations: 2,
           velocityDamping: 0.995,
+          enableTable: sOpts.enableTable ?? false,
+          tableZ: sOpts.tableZ ?? 0.0,
+          paperThickness: sOpts.paperThickness,
+          enableGravity: sOpts.enableGravity ?? false,
+          gravity: sOpts.gravity ?? 1.0,
+          muStatic: sOpts.muStatic ?? 0.5,
+          muKinetic: sOpts.muKinetic ?? 0.4,
+          bendingCompliance: sOpts.bendingCompliance,
         });
 
         // Seed microscopic out-of-plane perturbation at center
@@ -233,6 +242,37 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
             if (h.assignment === 'F' || h.assignment === 'U') h.stiffness = req.facetStiffness;
           }
         }
+        break;
+      }
+
+      case 'SET_PHYSICS_PARAMS': {
+        if (!solver || !(solver instanceof XPBDSolver)) return;
+        if (req.enableTable !== undefined || req.paperThickness !== undefined || req.tableZ !== undefined) {
+          solver.setTable(
+            req.enableTable ?? solver.enableTable,
+            req.paperThickness ?? solver.paperThickness,
+            req.tableZ ?? solver.tableZ
+          );
+        }
+        if (req.muStatic !== undefined || req.muKinetic !== undefined) {
+          solver.setFriction(
+            req.muStatic ?? solver.muStatic,
+            req.muKinetic ?? solver.muKinetic
+          );
+        }
+        if (req.enableGravity !== undefined || req.gravity !== undefined) {
+          solver.setGravity(
+            req.enableGravity ?? solver.enableGravity,
+            req.gravity ?? solver.gravity
+          );
+        }
+        if (req.bendingCompliance !== undefined) {
+          solver.setBendingCompliance(req.bendingCompliance);
+        }
+        if (req.substeps !== undefined) {
+          solver.substeps = req.substeps;
+        }
+        startLoop();
         break;
       }
 

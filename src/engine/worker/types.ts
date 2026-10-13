@@ -8,6 +8,17 @@ export type WorkerRequest =
       type: 'LOAD';
       fold: FoldFormat;
       meshOptions?: MeshOptions;
+      solverOptions?: {
+        enableTable?: boolean;
+        tableZ?: number;
+        paperThickness?: number;
+        enableGravity?: boolean;
+        gravity?: number;
+        muStatic?: number;
+        muKinetic?: number;
+        bendingCompliance?: number;
+        substeps?: number;
+      };
     }
   | {
       type: 'SET_ALPHA';
@@ -18,6 +29,18 @@ export type WorkerRequest =
       axialStiffness?: number;
       creaseStiffness?: number;
       facetStiffness?: number;
+    }
+  | {
+      type: 'SET_PHYSICS_PARAMS';
+      enableTable?: boolean;
+      tableZ?: number;
+      paperThickness?: number;
+      enableGravity?: boolean;
+      gravity?: number;
+      muStatic?: number;
+      muKinetic?: number;
+      bendingCompliance?: number;
+      substeps?: number;
     }
   | {
       type: 'SEED_FROM_FLAT';

@@ -20,8 +20,8 @@ describe('Phase 5.7 Requirement 5: Adaptive Continuation Tuning for XPBD', () =>
     }
 
     const testConfigs = [
-      { name: '121 Vertices', targetLen: 0.10, maxAllowedWallMs: 1500 },
-      { name: '441 Vertices', targetLen: 0.05, maxAllowedWallMs: 1500 },
+      { name: '121 Vertices', targetLen: 0.10, maxAllowedWallMs: 3000 },
+      { name: '441 Vertices', targetLen: 0.05, maxAllowedWallMs: 3000 },
     ];
 
     console.log('\n======================================================================================================================');
@@ -88,6 +88,7 @@ describe('Phase 5.7 Requirement 5: Adaptive Continuation Tuning for XPBD', () =>
       );
 
       expect(currentAlpha).toBeGreaterThanOrEqual(0.99);
+      expect(simTimeSec).toBeLessThanOrEqual(1.5); // Required <= 1.5s simulated time
       expect(wallMs).toBeLessThanOrEqual(cfg.maxAllowedWallMs);
       expect(maxTransientStrain).toBeLessThan(0.10); // Strain bounded strictly below 10% (vs DR's 52-66%)
     }

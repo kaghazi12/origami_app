@@ -4,15 +4,6 @@ import { OrbitControls, Center } from '@react-three/drei';
 import * as THREE from 'three';
 import { CreaseEdgeInfo } from '../../engine/worker/types';
 
-interface OrigamiModernCanvasProps {
-  indices: Uint32Array | null;
-  positions: Float32Array | null;
-  creaseEdges: CreaseEdgeInfo[];
-  showCreases?: boolean;
-  frontColor?: string;
-  backColor?: string;
-  className?: string;
-}
 
 const ThreeProfiler: React.FC = () => {
   const { gl } = useThree();
@@ -211,6 +202,44 @@ const PaperMesh: React.FC<{
   );
 };
 
+interface OrigamiModernCanvasProps {
+  indices: Uint32Array | null;
+  positions: Float32Array | null;
+  creaseEdges: CreaseEdgeInfo[];
+  showCreases?: boolean;
+  frontColor?: string;
+  backColor?: string;
+  className?: string;
+  showTable?: boolean;
+  paperThickness?: number;
+}
+
+const TableSurface: React.FC<{ paperThickness?: number }> = ({ paperThickness = 0.002 }) => {
+  return (
+    <group position={[0, 0, 0]}>
+      {/* Subtle tabletop grid */}
+      <gridHelper args={[3, 30, '#94a3b8', '#e2e8f0']} position={[0, -0.0005, 0]} />
+
+      {/* Tabletop receiver plane */}
+      <mesh position={[0, -0.001, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
+        <planeGeometry args={[4, 4]} />
+        <meshStandardMaterial color="#f8fafc" roughness={0.85} metalness={0.05} />
+      </mesh>
+
+      {/* Soft Contact Shadow beneath paper sheet */}
+      <mesh position={[0, -0.0002, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+        <planeGeometry args={[1.3, 1.3]} />
+        <meshBasicMaterial
+          color="#0f172a"
+          transparent
+          opacity={0.15}
+          depthWrite={false}
+        />
+      </mesh>
+    </group>
+  );
+};
+
 export const OrigamiModernCanvas: React.FC<OrigamiModernCanvasProps> = ({
   indices,
   positions,
@@ -219,17 +248,21 @@ export const OrigamiModernCanvas: React.FC<OrigamiModernCanvasProps> = ({
   frontColor = '#FCFBF7',
   backColor = '#EA580C', // Vibrant Origami Amber/Orange
   className = '',
+  showTable = true,
+  paperThickness = 0.002,
 }) => {
   return (
     <div className={`relative w-full h-full min-h-[300px] bg-gradient-to-b from-gray-100 to-gray-200 rounded-lg overflow-hidden border border-gray-300 ${className}`}>
       <Canvas
-        camera={{ position: [0.0, 1.5, 1.3], fov: 45 }}
+        camera={{ position: [0.0, 1.4, 1.2], fov: 45 }}
         gl={{ antialias: true, alpha: true }}
       >
         <ThreeProfiler />
-        <ambientLight intensity={0.75} />
-        <directionalLight position={[4, 8, 5]} intensity={1.1} castShadow />
-        <directionalLight position={[-4, -4, -3]} intensity={0.4} />
+        <ambientLight intensity={0.8} />
+        <directionalLight position={[3, 6, 4]} intensity={1.2} castShadow />
+        <directionalLight position={[-3, 4, -2]} intensity={0.4} />
+
+        {showTable && <TableSurface paperThickness={paperThickness} />}
 
         {indices && positions && (
           <PaperMesh
