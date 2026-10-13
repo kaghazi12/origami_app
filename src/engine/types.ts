@@ -119,9 +119,17 @@ export interface RenderBuffers {
   indices: Uint32Array;
 }
 
+export interface MeshOptions {
+  axialStiffness?: number;
+  creaseStiffness?: number;
+  facetStiffness?: number;
+  targetEdgeLength?: number;
+}
+
 export class FoldError extends Error {
   constructor(message: string) {
     super(message);
     this.name = 'FoldError';
   }
 }
+

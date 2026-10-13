@@ -27,6 +27,8 @@ import {
   PAPER_THEMES,
 } from './materials/PaperShaderMaterial';
 
+import { ModernOrigamiApp } from './components/modern/ModernOrigamiApp';
+
 const INITIAL_MODELS: Record<string, FoldModel> = {
   [PRELIMINARY_FOLD_MODEL.id]: PRELIMINARY_FOLD_MODEL,
   [SQUASH_FOLD_MODEL.id]: SQUASH_FOLD_MODEL,
@@ -39,7 +41,7 @@ const INITIAL_MODELS: Record<string, FoldModel> = {
   [CUP_MODEL.id]: CUP_MODEL,
 };
 
-export const App: React.FC = () => {
+const LegacyApp: React.FC = () => {
   // Model state
   const [models, setModels] = useState<Record<string, FoldModel>>(INITIAL_MODELS);
   const [activeModelId, setActiveModelId] = useState<string>(HALF_FOLD_MODEL.id);
@@ -255,6 +257,72 @@ export const App: React.FC = () => {
             onPreviewStep={handlePreviewStep}
           />
         )}
+      </div>
+    </div>
+  );
+};
+
+export const App: React.FC = () => {
+  const [engineMode, setEngineMode] = useState<'modern' | 'legacy'>(() => {
+    if (typeof window !== 'undefined' && window.location.hash === '#legacy') {
+      return 'legacy';
+    }
+    return 'modern';
+  });
+
+  useEffect(() => {
+    const handleHashChange = () => {
+      if (window.location.hash === '#legacy') setEngineMode('legacy');
+      else setEngineMode('modern');
+    };
+    window.addEventListener('hashchange', handleHashChange);
+    return () => window.removeEventListener('hashchange', handleHashChange);
+  }, []);
+
+  return (
+    <div className="flex flex-col h-screen w-screen overflow-hidden bg-slate-900 text-slate-100">
+      {/* Top Engine Route Switcher Bar */}
+      <div className="flex items-center justify-between px-4 py-1.5 bg-slate-950 border-b border-slate-800 text-xs z-50">
+        <div className="flex items-center space-x-2">
+          <span className="font-bold tracking-wider text-slate-300">ENGINE ARCHITECTURE:</span>
+          <div className="inline-flex p-0.5 bg-slate-900 rounded-lg border border-slate-800">
+            <button
+              onClick={() => {
+                setEngineMode('modern');
+                window.location.hash = '#modern';
+              }}
+              className={`px-3 py-1 font-semibold rounded-md transition-all ${
+                engineMode === 'modern'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Phase 5 Modern Engine (Web Worker + Bar-and-Hinge)
+            </button>
+            <button
+              onClick={() => {
+                setEngineMode('legacy');
+                window.location.hash = '#legacy';
+              }}
+              className={`px-3 py-1 font-semibold rounded-md transition-all ${
+                engineMode === 'legacy'
+                  ? 'bg-amber-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Legacy Preset Viewer
+            </button>
+          </div>
+        </div>
+
+        <div className="text-[11px] text-slate-500">
+          Route: <code className="text-slate-400">{engineMode === 'legacy' ? '#legacy' : '#modern'}</code>
+        </div>
+      </div>
+
+      {/* Main Container */}
+      <div className="flex-1 w-full h-full min-h-0 overflow-hidden">
+        {engineMode === 'modern' ? <ModernOrigamiApp /> : <LegacyApp />}
       </div>
     </div>
   );
