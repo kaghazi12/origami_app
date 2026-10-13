@@ -152,13 +152,17 @@ export function accumulateHingeForces(
     // Torque magnitude
     const tau = -hinge.stiffness * deltaTheta;
 
-    // Forces on opposing vertices
-    const f2Mag = (tau * eLen) / a1Sq;
+    // Forces on opposing vertices (regularized denominator to prevent 1/0 singularities during transient triangle inversion)
+    const minASq = eLenSq * 1e-6; // equivalent to minAltitude = 1e-3
+    const regA1Sq = Math.max(a1Sq, minASq);
+    const regA2Sq = Math.max(a2Sq, minASq);
+
+    const f2Mag = (tau * eLen) / regA1Sq;
     const f2x = f2Mag * n1x;
     const f2y = f2Mag * n1y;
     const f2z = f2Mag * n1z;
 
-    const f3Mag = (tau * eLen) / a2Sq;
+    const f3Mag = (tau * eLen) / regA2Sq;
     const f3x = f3Mag * n2x;
     const f3y = f3Mag * n2y;
     const f3z = f3Mag * n2z;

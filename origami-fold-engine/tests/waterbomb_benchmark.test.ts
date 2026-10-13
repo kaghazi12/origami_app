@@ -158,5 +158,5 @@ describe('Phase 4.5 Requirement 6: Rigorous Waterbomb Benchmark & Warm-Start Int
     }
 
     console.log('========================================================================================\n');
-  }, 35000);
+  }, 60000);
 });

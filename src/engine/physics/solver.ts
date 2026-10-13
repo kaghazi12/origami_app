@@ -19,22 +19,64 @@ export interface SolveResult {
 }
 
 /**
+ * Computes total effective nodal translational stiffness (N/m) across both
+ * axial bars (k_bar) and dihedral hinges (K_hinge ≈ k_hinge / h_altitude^2).
+ */
+export function computeNodalStiffness(mesh: TriMesh): Float64Array {
+  const numV = mesh.numVertices;
+  const nodalStiffness = new Float64Array(numV);
+
+  // 1. Axial bar stiffness
+  for (const bar of mesh.bars) {
+    nodalStiffness[bar.v0] += bar.stiffness;
+    nodalStiffness[bar.v1] += bar.stiffness;
+  }
+
+  // 2. Dihedral hinge rotational stiffness converted to transverse nodal stiffness
+  const uvs = mesh.uvs;
+  const hasUVs = uvs && uvs.length >= numV * 2;
+
+  for (const hinge of mesh.hinges) {
+    if (hinge.stiffness <= 0) continue;
+
+    let h2 = 0.05;
+    let h3 = 0.05;
+
+    if (hasUVs) {
+      const u0 = uvs[hinge.v0 * 2], v0 = uvs[hinge.v0 * 2 + 1];
+      const u1 = uvs[hinge.v1 * 2], v1 = uvs[hinge.v1 * 2 + 1];
+      const ex = u1 - u0, ey = v1 - v0;
+      const edgeLen = Math.hypot(ex, ey) || 1e-4;
+
+      const u2 = uvs[hinge.v2 * 2], v2 = uvs[hinge.v2 * 2 + 1];
+      const cross2 = Math.abs(ex * (v2 - v0) - ey * (u2 - u0));
+      h2 = Math.max(1e-4, cross2 / edgeLen);
+
+      const u3 = uvs[hinge.v3 * 2], v3 = uvs[hinge.v3 * 2 + 1];
+      const cross3 = Math.abs(ex * (v3 - v0) - ey * (u3 - u0));
+      h3 = Math.max(1e-4, cross3 / edgeLen);
+    }
+
+    const kEff2 = hinge.stiffness / (h2 * h2);
+    const kEff3 = hinge.stiffness / (h3 * h3);
+
+    nodalStiffness[hinge.v2] += kEff2;
+    nodalStiffness[hinge.v3] += kEff3;
+    nodalStiffness[hinge.v0] += 0.5 * (kEff2 + kEff3);
+    nodalStiffness[hinge.v1] += 0.5 * (kEff2 + kEff3);
+  }
+
+  return nodalStiffness;
+}
+
+/**
  * Computes Barnes fictitious nodal mass scaling from direct nodal stiffness:
  * m_i = max(m_min, S_i / omega_target^2), equalizing local resonant frequencies
+ * across both axial and hinge degrees of freedom.
  */
 export function computeBarnesMassScaling(mesh: TriMesh, targetOmega = 500): Float64Array {
   const numV = mesh.numVertices;
-  const nodalStiffness = new Float64Array(numV);
-  for (const b of mesh.bars) {
-    nodalStiffness[b.v0] += b.stiffness;
-    nodalStiffness[b.v1] += b.stiffness;
-  }
-  for (const h of mesh.hinges) {
-    nodalStiffness[h.v0] += h.stiffness;
-    nodalStiffness[h.v1] += h.stiffness;
-    nodalStiffness[h.v2] += h.stiffness;
-    nodalStiffness[h.v3] += h.stiffness;
-  }
+  const nodalStiffness = computeNodalStiffness(mesh);
   const scaledMasses = new Float64Array(numV);
   const factor = 1.0 / (targetOmega * targetOmega);
   for (let i = 0; i < numV; i++) {
@@ -45,15 +87,11 @@ export function computeBarnesMassScaling(mesh: TriMesh, targetOmega = 500): Floa
 
 /**
  * Computes the critical explicit time step limit dt_crit = 2 / omega_max, where
- * omega_i = sqrt(sum(k_bar) / m_i).
+ * omega_i = sqrt(S_i / m_i) with S_i accounting for both axial bars and dihedral hinges.
  * Returns dt = safetyFactor * dt_crit.
  */
-export function computeStableTimeStep(mesh: TriMesh, safetyFactor = 0.5): number {
-  const vertexStiffness = new Float64Array(mesh.numVertices);
-  for (const bar of mesh.bars) {
-    vertexStiffness[bar.v0] += bar.stiffness;
-    vertexStiffness[bar.v1] += bar.stiffness;
-  }
+export function computeStableTimeStep(mesh: TriMesh, safetyFactor = 0.45): number {
+  const vertexStiffness = computeNodalStiffness(mesh);
 
   let maxOmega = 0;
   for (let i = 0; i < mesh.numVertices; i++) {
@@ -115,8 +153,9 @@ export class BarHingeSolver {
     }
 
     this.dt = options.dt ?? computeStableTimeStep(mesh, 0.4);
-    // If kinetic damping is active without explicit damping set, default to 1.0 (undamped Hamiltonian flight between peaks)
-    this.damping = options.damping ?? (this.kineticDamping ? 1.0 : 0.95);
+    // If kinetic damping is active without explicit damping set, default to 0.98 (light viscous background damping
+    // to suppress high-frequency local mode chattering while kinetic peak resets eliminate fundamental mode ringing)
+    this.damping = options.damping ?? (this.kineticDamping ? 0.98 : 0.95);
   }
 
   /**
@@ -239,8 +278,8 @@ export class BarHingeSolver {
       const keConverged = kineticEnergy < kineticTol;
 
       // Convergence check: if residualForceTol is specified, static equilibrium is reached when forces balance.
-      // Otherwise, falls back to kinetic energy decay.
-      if (iter > 5 && (forceConverged || (residualForceTol === undefined && keConverged))) {
+      // Otherwise, falls back to kinetic energy decay (requiring iter > 2 to avoid false-positive at rest).
+      if (residualForceTol !== undefined ? forceConverged : (iter > 2 && keConverged)) {
         converged = true;
         return {
           iterations: iter + 1,

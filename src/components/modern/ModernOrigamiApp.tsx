@@ -53,6 +53,13 @@ export const ModernOrigamiApp: React.FC = () => {
   const frameCountRef = useRef<number>(0);
   const lastFpsTimeRef = useRef<number>(performance.now());
 
+  // Ping-pong buffers for client-side zero-allocation rendering while returning worker buffers
+  const pingPongRef = useRef<{ bufA: Float32Array | null; bufB: Float32Array | null; flag: boolean }>({
+    bufA: null,
+    bufB: null,
+    flag: false,
+  });
+
   // Worker client ref
   const clientRef = useRef<OrigamiWorkerClient | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -68,7 +75,18 @@ export const ModernOrigamiApp: React.FC = () => {
     });
 
     client.onFrame((frameEvent) => {
-      setPositions(frameEvent.positions);
+      // 1. Copy into alternating client ping-pong buffer so Three.js renders a valid, non-detached buffer
+      const n = frameEvent.positions.length;
+      const pp = pingPongRef.current;
+      if (!pp.bufA || pp.bufA.length !== n) {
+        pp.bufA = new Float32Array(n);
+        pp.bufB = new Float32Array(n);
+      }
+      const clientBuf = pp.flag ? pp.bufA! : pp.bufB!;
+      pp.flag = !pp.flag;
+      clientBuf.set(frameEvent.positions);
+
+      setPositions(clientBuf);
       setStats(frameEvent.stats);
       setLatencyMs(frameEvent.latencyMs);
 
@@ -82,7 +100,7 @@ export const ModernOrigamiApp: React.FC = () => {
         lastFpsTimeRef.current = now;
       }
 
-      // Return buffer for double-buffering reuse
+      // 2. Return the worker's buffer back to worker thread for immediate zero-allocation recycling
       client.returnBuffer(frameEvent.positions.buffer);
     });
 

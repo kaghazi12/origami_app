@@ -25,9 +25,10 @@ const PaperMesh: React.FC<{
   // Create persistent BufferGeometry instance once
   const geometry = useMemo(() => {
     const geo = new THREE.BufferGeometry();
-    const posAttr = new THREE.BufferAttribute(new Float32Array(positions.length), 3);
+    const posAttr = new THREE.BufferAttribute(new Float32Array(positions), 3);
     geo.setAttribute('position', posAttr);
     geo.setIndex(new THREE.BufferAttribute(new Uint32Array(indices), 1));
+    geo.computeVertexNormals();
     return geo;
   }, [indices.length]);
 
@@ -68,6 +69,7 @@ const PaperMesh: React.FC<{
       (posAttr.array as Float32Array).set(positions);
       posAttr.needsUpdate = true;
       geometry.computeVertexNormals();
+      geometry.computeBoundingBox();
     }
 
     // Update crease lines
@@ -77,10 +79,8 @@ const PaperMesh: React.FC<{
         const lineArr = linePosAttr.array as Float32Array;
         for (let i = 0; i < creaseEdges.length; i++) {
           const e = creaseEdges[i];
-          const v0 = e.v0;
-          const v1 = e.v1;
-          const idx0 = v0 * 3;
-          const idx1 = v1 * 3;
+          const idx0 = e.v0 * 3;
+          const idx1 = e.v1 * 3;
 
           // Lift slightly along Z to avoid z-fighting with paper surface
           lineArr[i * 6 + 0] = positions[idx0 + 0];
@@ -88,8 +88,8 @@ const PaperMesh: React.FC<{
           lineArr[i * 6 + 2] = positions[idx0 + 2] + 0.001;
 
           lineArr[i * 6 + 3] = positions[idx1 + 0];
-          lineArr[i * 6 + 1 + 3] = positions[idx1 + 1];
-          lineArr[i * 6 + 2 + 3] = positions[idx1 + 2] + 0.001;
+          lineArr[i * 6 + 4] = positions[idx1 + 1];
+          lineArr[i * 6 + 5] = positions[idx1 + 2] + 0.001;
         }
         linePosAttr.needsUpdate = true;
       }
@@ -97,7 +97,7 @@ const PaperMesh: React.FC<{
   }, [positions, geometry, creaseGeometry, creaseEdges, showCreases]);
 
   return (
-    <group>
+    <group position={[-0.58, 0, -0.50]} rotation={[-Math.PI / 2, 0, 0]}>
       {/* Front Face: crisp origami paper color */}
       <mesh geometry={geometry}>
         <meshStandardMaterial
@@ -146,25 +146,23 @@ export const OrigamiModernCanvas: React.FC<OrigamiModernCanvasProps> = ({
   return (
     <div className={`relative w-full h-full min-h-[300px] bg-gradient-to-b from-gray-100 to-gray-200 rounded-lg overflow-hidden border border-gray-300 ${className}`}>
       <Canvas
-        camera={{ position: [0.8, 1.2, 1.6], fov: 45 }}
+        camera={{ position: [0.0, 1.5, 1.3], fov: 45 }}
         gl={{ antialias: true, alpha: true }}
       >
         <ambientLight intensity={0.75} />
         <directionalLight position={[4, 8, 5]} intensity={1.1} castShadow />
         <directionalLight position={[-4, -4, -3]} intensity={0.4} />
 
-        <Center top position={[0, 0, 0]}>
-          {indices && positions && (
-            <PaperMesh
-              indices={indices}
-              positions={positions}
-              creaseEdges={creaseEdges}
-              showCreases={showCreases}
-              frontColor={frontColor}
-              backColor={backColor}
-            />
-          )}
-        </Center>
+        {indices && positions && (
+          <PaperMesh
+            indices={indices}
+            positions={positions}
+            creaseEdges={creaseEdges}
+            showCreases={showCreases}
+            frontColor={frontColor}
+            backColor={backColor}
+          />
+        )}
 
         <OrbitControls
           makeDefault

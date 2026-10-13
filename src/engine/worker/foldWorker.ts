@@ -51,6 +51,17 @@ function runPhysicsTick() {
   let ke = 0;
   let isConverged = false;
 
+  // Continuation ramping: smoothly slew currentAlpha toward targetAlpha to preserve physical equilibrium branch
+  if (Math.abs(currentAlpha - targetAlpha) > 1e-5) {
+    const alphaSlewRate = 0.02; // max deltaAlpha per tick (~300ms for full 0 -> 1 travel)
+    if (currentAlpha < targetAlpha) {
+      currentAlpha = Math.min(targetAlpha, currentAlpha + alphaSlewRate);
+    } else {
+      currentAlpha = Math.max(targetAlpha, currentAlpha - alphaSlewRate);
+    }
+    rampRestAngles(mesh, currentAlpha);
+  }
+
   // Run dynamic relaxation substeps until time budget is consumed
   while (performance.now() - tickStart < TIME_BUDGET_MS) {
     const stepResult = solver.step();
@@ -60,7 +71,8 @@ function runPhysicsTick() {
     stepCounter++;
 
     const maxResForce = solver.getMaxResidualForce();
-    if (maxResForce < 0.005 && ke < 1e-6) {
+    const targetReached = Math.abs(currentAlpha - targetAlpha) < 1e-4;
+    if (targetReached && maxResForce < 0.005 && ke < 1e-6) {
       isConverged = true;
       break;
     }
@@ -100,8 +112,11 @@ function runPhysicsTick() {
   // Zero-copy transfer of the positions buffer
   (self as unknown as Worker).postMessage(response, [posF32.buffer]);
 
-  // If not converged or alpha still scrubbing, keep looping
-  scheduleNextTick();
+  // Keep looping if not fully converged or still slewing alpha
+  const targetReached = Math.abs(currentAlpha - targetAlpha) < 1e-4;
+  if (!isConverged || !targetReached) {
+    scheduleNextTick();
+  }
 }
 
 self.onmessage = (e: MessageEvent<WorkerRequest>) => {
@@ -174,16 +189,10 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
       case 'SET_ALPHA': {
         if (!mesh) return;
         targetAlpha = Math.max(0, Math.min(1, req.alpha));
-        currentAlpha = targetAlpha;
-        rampRestAngles(mesh, currentAlpha);
         if (isPaused) {
-          // If paused, briefly wake up to update rest state
           isPaused = false;
-          runPhysicsTick();
-          isPaused = true;
-        } else {
-          startLoop();
         }
+        startLoop();
         break;
       }
 

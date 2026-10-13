@@ -204,4 +204,54 @@ describe('Phase 5: Web Worker Message Protocol & Double-Buffering Tests', () => 
       expect(lastResp.paused).toBe(false);
     }
   });
+
+  it('exercises real message boundary: asserts transferable buffer detachment and RETURN_BUFFER recycling', async () => {
+    // Exercises standard Web Messaging MessageChannel boundary (structured clone with Transferable support)
+    const { port1, port2 } = new MessageChannel();
+
+    const bufferSize = 16 * 3 * 4; // 192 bytes for 16 vertices
+    const originalBuffer = new ArrayBuffer(bufferSize);
+    expect(originalBuffer.byteLength).toBe(bufferSize);
+
+    // Promise for worker receiving RETURN_BUFFER
+    const workerRecycledPromise = new Promise<ArrayBuffer>((resolve) => {
+      port2.onmessage = (e: any) => {
+        if (e.data.type === 'RETURN_BUFFER') {
+          resolve(e.data.buffer);
+        }
+      };
+    });
+
+    // Promise for client receiving FRAME
+    const clientReceivedPromise = new Promise<ArrayBuffer>((resolve) => {
+      port1.onmessage = (e: any) => {
+        if (e.data.type === 'FRAME') {
+          resolve(e.data.buffer);
+        }
+      };
+    });
+
+    // 1. Worker transmits FRAME with transferable ArrayBuffer
+    port2.postMessage({ type: 'FRAME', buffer: originalBuffer }, [originalBuffer]);
+
+    // TRANSFER ASSERTION 1: Sender's ArrayBuffer is detached immediately upon transfer (byteLength becomes 0)
+    expect(originalBuffer.byteLength).toBe(0);
+
+    // 2. Client receives transferred buffer with full byte length
+    const clientBuffer = await clientReceivedPromise;
+    expect(clientBuffer.byteLength).toBe(bufferSize);
+
+    // 3. Client returns buffer back to worker via RETURN_BUFFER transfer
+    port1.postMessage({ type: 'RETURN_BUFFER', buffer: clientBuffer }, [clientBuffer]);
+
+    // TRANSFER ASSERTION 2: Client's ArrayBuffer is detached upon return transfer
+    expect(clientBuffer.byteLength).toBe(0);
+
+    // 4. Worker receives recycled ArrayBuffer ready for next frame without new allocation
+    const recycledBuffer = await workerRecycledPromise;
+    expect(recycledBuffer.byteLength).toBe(bufferSize);
+
+    port1.close();
+    port2.close();
+  });
 });
