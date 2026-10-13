@@ -9,6 +9,7 @@ import { CreaseEdgeInfo, WorkerFrameStats, WorkerRequest, WorkerResponse } from 
 let mesh: TriMesh | null = null;
 let solver: FoldSolver | null = null;
 let isPaused = false;
+let isConverged = false;
 let currentAlpha = 0;
 let targetAlpha = 0;
 let stepCounter = 0;
@@ -28,6 +29,18 @@ function getRecycledBuffer(byteLength: number): ArrayBuffer {
   return new ArrayBuffer(byteLength);
 }
 
+let restFrameCount = 0;
+let isSleeping = false;
+
+function wakeFromSleep() {
+  restFrameCount = 0;
+  if (isSleeping) {
+    isSleeping = false;
+    isConverged = false;
+    startLoop();
+  }
+}
+
 function stopLoop() {
   if (loopTimer !== null) {
     clearTimeout(loopTimer);
@@ -36,23 +49,23 @@ function stopLoop() {
 }
 
 function startLoop() {
-  if (loopTimer !== null || isPaused || !mesh || !solver) return;
+  if (loopTimer !== null || isPaused || isSleeping || !mesh || !solver) return;
   scheduleNextTick();
 }
 
 function scheduleNextTick() {
+  if (isSleeping || isPaused) return;
   loopTimer = setTimeout(runPhysicsTick, 8); // 8 ms interval (~120 Hz maximum physics frequency)
 }
 
 function runPhysicsTick() {
   loopTimer = null;
-  if (isPaused || !mesh || !solver) return;
+  if (isPaused || isSleeping || !mesh || !solver) return;
 
   const tickStart = performance.now();
   let substeps = 0;
   let pe = 0;
   let ke = 0;
-  let isConverged = false;
 
   // Adaptive Continuation: advance currentAlpha only as fast as solver keeps strain strictly below 4%
   const currentStrain = solver.getMaxStrain();
@@ -80,9 +93,35 @@ function runPhysicsTick() {
   stepCounter++;
   const stepDurationMs = performance.now() - tStep0;
 
+  // Max vertex speed across mesh
+  let maxSpeed = 0;
+  const vel = mesh.velocities;
+  for (let i = 0; i < mesh.numVertices; i++) {
+    const vx = vel[i * 3 + 0];
+    const vy = vel[i * 3 + 1];
+    const vz = vel[i * 3 + 2];
+    const s = Math.hypot(vx, vy, vz);
+    if (s > maxSpeed) maxSpeed = s;
+  }
+
   const maxResForce = solver.getMaxResidualForce();
+  const maxStrain = solver.getMaxStrain();
   const targetReached = Math.abs(currentAlpha - targetAlpha) < 1e-4;
+
   if (targetReached && maxResForce < 0.05 && ke < 1e-7) {
+    isConverged = true;
+  }
+
+  // Sleep at rest: when speed < 1e-4 m/s, strain < 0.01, and target alpha reached for N=10 frames
+  const isResting = targetReached && maxSpeed < 1e-4 && maxStrain < 0.01;
+  if (isResting) {
+    restFrameCount++;
+  } else {
+    restFrameCount = 0;
+  }
+
+  if (restFrameCount >= 10) {
+    isSleeping = true;
     isConverged = true;
   }
 
@@ -105,14 +144,14 @@ function runPhysicsTick() {
     const stats: WorkerFrameStats = {
       potentialEnergy: pe,
       kineticEnergy: ke,
-      maxResidualForce: solver.getMaxResidualForce(),
-      maxStrain: solver.getMaxStrain(),
+      maxResidualForce: maxResForce,
+      maxStrain,
       converged: isConverged,
       alpha: currentAlpha,
       targetAlpha,
       stepCount: stepCounter,
       substepsInTick: substeps,
-      iterationsPerTick: 20, // 10 substeps * 2 iterations
+      iterationsPerTick: 20,
       tickDurationMs,
       stepDurationMs,
       postTimestamp: now,
@@ -130,8 +169,8 @@ function runPhysicsTick() {
     (self as unknown as Worker).postMessage(response, [posF32.buffer]);
   }
 
-  // Keep looping if not fully converged or still slewing alpha
-  if (!isConverged || !targetReached) {
+  // Keep looping only if not sleeping and not fully settled
+  if (!isSleeping && (!isConverged || !targetReached)) {
     scheduleNextTick();
   }
 }
@@ -173,6 +212,8 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
         targetAlpha = 0;
         stepCounter = 0;
         isPaused = false;
+        isSleeping = false;
+        restFrameCount = 0;
         isAwaitingBuffer = false;
         bufferPool.length = 0;
 
@@ -223,7 +264,7 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
         if (isPaused) {
           isPaused = false;
         }
-        startLoop();
+        wakeFromSleep();
         break;
       }
 
@@ -242,6 +283,7 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
             if (h.assignment === 'F' || h.assignment === 'U') h.stiffness = req.facetStiffness;
           }
         }
+        wakeFromSleep();
         break;
       }
 
@@ -272,14 +314,28 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
         if (req.substeps !== undefined) {
           solver.substeps = req.substeps;
         }
-        startLoop();
+        wakeFromSleep();
+        break;
+      }
+
+      case 'SET_PINS': {
+        if (!solver) return;
+        solver.setFixedVertices?.(new Set(req.pins));
+        wakeFromSleep();
+        break;
+      }
+
+      case 'SET_DRAG': {
+        if (!solver) return;
+        solver.setDragTarget?.(req.vertexIndex, req.targetPos);
+        wakeFromSleep();
         break;
       }
 
       case 'SEED_FROM_FLAT': {
         if (!mesh || !solver) return;
         seedFromFlat(mesh, req.eps ?? 1e-3);
-        startLoop();
+        wakeFromSleep();
         break;
       }
 
@@ -297,7 +353,7 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
           mesh.velocities[i * 3 + 2] = 0;
         }
         isAwaitingBuffer = false;
-        startLoop();
+        wakeFromSleep();
         break;
       }
 
@@ -319,7 +375,7 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
           paused: false,
           alpha: currentAlpha,
         });
-        startLoop();
+        wakeFromSleep();
         break;
       }
 
@@ -329,8 +385,8 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
           bufferPool.push(req.buffer as ArrayBuffer);
         }
         isAwaitingBuffer = false;
-        // If simulation loop was waiting, schedule immediately
-        if (loopTimer === null && (!isPaused && mesh && solver)) {
+        // If simulation loop was waiting and NOT sleeping, schedule immediately
+        if (loopTimer === null && (!isPaused && !isSleeping && mesh && solver)) {
           scheduleNextTick();
         }
         break;

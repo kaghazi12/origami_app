@@ -74,6 +74,32 @@ const ThreeProfiler: React.FC = () => {
   return null;
 };
 
+const PinMarker: React.FC<{ position: [number, number, number] }> = ({ position }) => {
+  return (
+    <group position={position}>
+      <mesh position={[0, 0.04, 0]}>
+        <sphereGeometry args={[0.015, 16, 16]} />
+        <meshStandardMaterial color="#dc2626" roughness={0.3} metalness={0.2} />
+      </mesh>
+      <mesh position={[0, 0.02, 0]}>
+        <cylinderGeometry args={[0.002, 0.002, 0.04, 8]} />
+        <meshStandardMaterial color="#cbd5e1" roughness={0.2} metalness={0.8} />
+      </mesh>
+    </group>
+  );
+};
+
+const DragHandleMarker: React.FC<{ position: [number, number, number] }> = ({ position }) => {
+  return (
+    <group position={position}>
+      <mesh>
+        <sphereGeometry args={[0.02, 16, 16]} />
+        <meshStandardMaterial color="#06b6d4" roughness={0.2} metalness={0.5} emissive="#0891b2" emissiveIntensity={0.6} />
+      </mesh>
+    </group>
+  );
+};
+
 const PaperMesh: React.FC<{
   indices: Uint32Array;
   positions: Float32Array;
@@ -81,7 +107,100 @@ const PaperMesh: React.FC<{
   showCreases: boolean;
   frontColor: string;
   backColor: string;
-}> = ({ indices, positions, creaseEdges, showCreases, frontColor, backColor }) => {
+  paperThickness: number;
+  onTogglePin?: (vertexIndex: number) => void;
+  onDragStart?: (vertexIndex: number) => void;
+  onDragMove?: (vertexIndex: number, targetPos: [number, number, number]) => void;
+  onDragEnd?: () => void;
+  orbitControlsRef: React.MutableRefObject<any>;
+}> = ({
+  indices,
+  positions,
+  creaseEdges,
+  showCreases,
+  frontColor,
+  backColor,
+  paperThickness,
+  onTogglePin,
+  onDragStart,
+  onDragMove,
+  onDragEnd,
+  orbitControlsRef,
+}) => {
+  const isDraggingRef = useRef(false);
+  const activeDragVRef = useRef<number | null>(null);
+  const dragPlaneYRef = useRef(0);
+
+  const handlePointerDown = (e: any) => {
+    e.stopPropagation();
+    if (!e.face) return;
+    const hitPoint = e.point;
+
+    const physX = hitPoint.x + 0.58;
+    const physY = -(hitPoint.z + 0.50);
+
+    const candidates = [e.face.a, e.face.b, e.face.c];
+    let nearestV = candidates[0];
+    let minDist = Infinity;
+    for (const v of candidates) {
+      const vx = positions[v * 3 + 0];
+      const vy = positions[v * 3 + 1];
+      const dist = Math.hypot(vx - physX, vy - physY);
+      if (dist < minDist) {
+        minDist = dist;
+        nearestV = v;
+      }
+    }
+
+    if (e.shiftKey) {
+      onTogglePin?.(nearestV);
+      return;
+    }
+
+    isDraggingRef.current = true;
+    activeDragVRef.current = nearestV;
+    dragPlaneYRef.current = hitPoint.y;
+    if (orbitControlsRef.current) orbitControlsRef.current.enabled = false;
+    onDragStart?.(nearestV);
+    try {
+      e.target?.setPointerCapture?.(e.pointerId);
+    } catch {}
+  };
+
+  const handlePointerMove = (e: any) => {
+    if (!isDraggingRef.current || activeDragVRef.current === null) return;
+    e.stopPropagation();
+
+    const ray = e.ray;
+    if (!ray) return;
+    const targetY = dragPlaneYRef.current;
+    if (Math.abs(ray.direction.y) < 1e-4) return;
+    const t = (targetY - ray.origin.y) / ray.direction.y;
+    if (t < 0) return;
+
+    const hitX = ray.origin.x + ray.direction.x * t;
+    const hitZ = ray.origin.z + ray.direction.z * t;
+
+    const newPhysX = hitX + 0.58;
+    const newPhysY = -(hitZ + 0.50);
+    const newPhysZ = Math.max(paperThickness * 0.5, targetY);
+
+    onDragMove?.(activeDragVRef.current, [newPhysX, newPhysY, newPhysZ]);
+  };
+
+  const handlePointerUp = (e: any) => {
+    if (isDraggingRef.current) {
+      e.stopPropagation();
+      isDraggingRef.current = false;
+      activeDragVRef.current = null;
+      if (orbitControlsRef.current) orbitControlsRef.current.enabled = true;
+      onDragEnd?.();
+      try {
+        e.target?.releasePointerCapture?.(e.pointerId);
+      } catch {}
+    }
+  };
+
   // Create persistent BufferGeometry instance once
   const geometry = useMemo(() => {
     const geo = new THREE.BufferGeometry();
@@ -128,15 +247,7 @@ const PaperMesh: React.FC<{
     if (posAttr && posAttr.array.length === positions.length) {
       (posAttr.array as Float32Array).set(positions);
       posAttr.needsUpdate = true;
-      const tNorm0 = performance.now();
       geometry.computeVertexNormals();
-      const normMs = performance.now() - tNorm0;
-      if (typeof window !== 'undefined' && (window as any).__ORIGAMI_PROFILING__) {
-        (window as any).__ORIGAMI_PROFILING__.computeVertexNormalsMs.push(normMs);
-        if ((window as any).__ORIGAMI_PROFILING__.computeVertexNormalsMs.length > 500) {
-          (window as any).__ORIGAMI_PROFILING__.computeVertexNormalsMs.shift();
-        }
-      }
       geometry.computeBoundingBox();
     }
 
@@ -167,7 +278,12 @@ const PaperMesh: React.FC<{
   return (
     <group position={[-0.58, 0, -0.50]} rotation={[-Math.PI / 2, 0, 0]}>
       {/* Front Face: crisp origami paper color */}
-      <mesh geometry={geometry}>
+      <mesh
+        geometry={geometry}
+        onPointerDown={handlePointerDown}
+        onPointerMove={handlePointerMove}
+        onPointerUp={handlePointerUp}
+      >
         <meshStandardMaterial
           color={frontColor}
           side={THREE.FrontSide}
@@ -202,7 +318,7 @@ const PaperMesh: React.FC<{
   );
 };
 
-interface OrigamiModernCanvasProps {
+export interface OrigamiModernCanvasProps {
   indices: Uint32Array | null;
   positions: Float32Array | null;
   creaseEdges: CreaseEdgeInfo[];
@@ -212,6 +328,12 @@ interface OrigamiModernCanvasProps {
   className?: string;
   showTable?: boolean;
   paperThickness?: number;
+  pinnedVertices?: number[];
+  draggedVertex?: number | null;
+  onTogglePin?: (vertexIndex: number) => void;
+  onDragStart?: (vertexIndex: number) => void;
+  onDragMove?: (vertexIndex: number, targetPos: [number, number, number]) => void;
+  onDragEnd?: () => void;
 }
 
 const TableSurface: React.FC<{ paperThickness?: number }> = ({ paperThickness = 0.002 }) => {
@@ -246,11 +368,19 @@ export const OrigamiModernCanvas: React.FC<OrigamiModernCanvasProps> = ({
   creaseEdges,
   showCreases = true,
   frontColor = '#FCFBF7',
-  backColor = '#EA580C', // Vibrant Origami Amber/Orange
+  backColor = '#EA580C',
   className = '',
   showTable = true,
   paperThickness = 0.002,
+  pinnedVertices = [],
+  draggedVertex = null,
+  onTogglePin,
+  onDragStart,
+  onDragMove,
+  onDragEnd,
 }) => {
+  const orbitRef = useRef<any>(null);
+
   return (
     <div className={`relative w-full h-full min-h-[300px] bg-gradient-to-b from-gray-100 to-gray-200 rounded-lg overflow-hidden border border-gray-300 ${className}`}>
       <Canvas
@@ -265,17 +395,45 @@ export const OrigamiModernCanvas: React.FC<OrigamiModernCanvasProps> = ({
         {showTable && <TableSurface paperThickness={paperThickness} />}
 
         {indices && positions && (
-          <PaperMesh
-            indices={indices}
-            positions={positions}
-            creaseEdges={creaseEdges}
-            showCreases={showCreases}
-            frontColor={frontColor}
-            backColor={backColor}
-          />
+          <>
+            <PaperMesh
+              indices={indices}
+              positions={positions}
+              creaseEdges={creaseEdges}
+              showCreases={showCreases}
+              frontColor={frontColor}
+              backColor={backColor}
+              paperThickness={paperThickness}
+              onTogglePin={onTogglePin}
+              onDragStart={onDragStart}
+              onDragMove={onDragMove}
+              onDragEnd={onDragEnd}
+              orbitControlsRef={orbitRef}
+            />
+
+            {/* Pinned Vertices Markers */}
+            {pinnedVertices.map((v) => {
+              const px = positions[v * 3 + 0] - 0.58;
+              const pz = -positions[v * 3 + 1] - 0.50;
+              const py = positions[v * 3 + 2];
+              return <PinMarker key={`pin-${v}`} position={[px, py, pz]} />;
+            })}
+
+            {/* Dragged Vertex Marker */}
+            {draggedVertex !== null && (
+              <DragHandleMarker
+                position={[
+                  positions[draggedVertex * 3 + 0] - 0.58,
+                  positions[draggedVertex * 3 + 2],
+                  -positions[draggedVertex * 3 + 1] - 0.50,
+                ]}
+              />
+            )}
+          </>
         )}
 
         <OrbitControls
+          ref={orbitRef}
           makeDefault
           enableDamping
           dampingFactor={0.05}

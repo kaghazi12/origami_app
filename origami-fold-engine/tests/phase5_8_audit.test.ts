@@ -198,7 +198,7 @@ describe('Phase 5.8 Audit & Verification', () => {
       m.setupTargets(meshDR);
       m.seedZ(meshDR.positions, meshDR.uvs);
       const solverDR = new BarHingeSolver(meshDR, { damping: 0.93, fixedVertices: new Set([m.fixedVertex]) });
-      solverDR.solveToEquilibrium({ maxSteps: 8000, residualThreshold: 0.005 });
+      solverDR.solveToEquilibrium(8000, 1e-8, 0.005);
       assertFinite(meshDR);
 
       // 2. XPBD Solver
@@ -211,10 +211,11 @@ describe('Phase 5.8 Audit & Verification', () => {
       m.seedZ(meshXPBD.positions, meshXPBD.uvs);
       const solverXPBD = new XPBDSolver(meshXPBD, {
         substeps: 12,
-        iterations: 2,
+        iterations: 1,
+        distanceIterations: 8,
         fixedVertices: [m.fixedVertex],
       });
-      solverXPBD.solveToEquilibrium({ maxSteps: 800, dt: 0.016, residualThreshold: 0.005 });
+      solverXPBD.solveToEquilibrium(800, 1e-8, 0.005);
       assertFinite(meshXPBD);
 
       let maxErrDR = 0;

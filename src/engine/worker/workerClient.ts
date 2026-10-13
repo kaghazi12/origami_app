@@ -179,6 +179,21 @@ export class OrigamiWorkerClient {
     });
   }
 
+  setPins(pins: number[]): void {
+    this.postMessage({
+      type: 'SET_PINS',
+      pins,
+    });
+  }
+
+  setDrag(vertexIndex: number, targetPos: [number, number, number] | null): void {
+    this.postMessage({
+      type: 'SET_DRAG',
+      vertexIndex,
+      targetPos,
+    });
+  }
+
   /**
    * Recycles the position ArrayBuffer back to the worker for zero-allocation double-buffering
    */

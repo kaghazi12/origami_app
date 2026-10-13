@@ -60,6 +60,10 @@ export const ModernOrigamiApp: React.FC = () => {
   const [paperStiffnessPreset, setPaperStiffnessPreset] = useState<number>(50); // 0 (tissue) to 100 (card)
   const [substepsPerFrame, setSubstepsPerFrame] = useState<number>(10);
 
+  // Phase 7: Pivot-and-drag interaction state
+  const [pinnedVertices, setPinnedVertices] = useState<number[]>([]);
+  const [draggedVertex, setDraggedVertex] = useState<number | null>(null);
+
   // Performance telemetry
   const [fps, setFps] = useState<number>(60);
   const [latencyMs, setLatencyMs] = useState<number>(0);
@@ -199,6 +203,8 @@ export const ModernOrigamiApp: React.FC = () => {
     setCurrentFold(fold);
     setAlpha(0);
     setIsPlaying(false);
+    setPinnedVertices([]);
+    setDraggedVertex(null);
     const targetEdgeLength = density === '441' ? 0.05 : 0.10;
     const bendingCompliance = 0.05 * Math.pow(10, -4 * (paperStiffnessPreset / 100));
     clientRef.current?.load(
@@ -263,6 +269,36 @@ export const ModernOrigamiApp: React.FC = () => {
     setAlpha(newAlpha);
     clientRef.current?.setAlpha(newAlpha);
   };
+
+  // Phase 7: Pivot and Drag Handlers
+  const handleTogglePin = useCallback((vIndex: number) => {
+    setPinnedVertices((prev) => {
+      const next = prev.includes(vIndex) ? prev.filter((p) => p !== vIndex) : [...prev, vIndex];
+      clientRef.current?.setPins(next);
+      return next;
+    });
+  }, []);
+
+  const handleClearPins = useCallback(() => {
+    setPinnedVertices([]);
+    clientRef.current?.setPins([]);
+  }, []);
+
+  const handleDragStart = useCallback((vIndex: number) => {
+    setDraggedVertex(vIndex);
+  }, []);
+
+  const handleDragMove = useCallback((vIndex: number, targetPos: [number, number, number]) => {
+    setDraggedVertex(vIndex);
+    clientRef.current?.setDrag(vIndex, targetPos);
+  }, []);
+
+  const handleDragEnd = useCallback(() => {
+    if (draggedVertex !== null) {
+      clientRef.current?.setDrag(draggedVertex, null);
+      setDraggedVertex(null);
+    }
+  }, [draggedVertex]);
 
   // Play / Pause animation loop
   useEffect(() => {
@@ -428,6 +464,21 @@ export const ModernOrigamiApp: React.FC = () => {
             <Upload className="w-3.5 h-3.5" />
             <span>Load .FOLD</span>
           </button>
+
+          {pinnedVertices.length > 0 && (
+            <button
+              onClick={handleClearPins}
+              className="px-2.5 py-1 text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-md border border-red-200 transition-colors"
+              title="Clear all pinned vertices"
+            >
+              Clear Pins ({pinnedVertices.length})
+            </button>
+          )}
+
+          <div className="hidden xl:flex items-center space-x-1 text-[11px] text-gray-500 bg-gray-50 px-2 py-1 rounded border border-gray-200">
+            <span className="font-semibold text-indigo-600">Interaction:</span>
+            <span>Shift+Click to Pin P, Drag to Pull Q</span>
+          </div>
         </div>
       </div>
 
@@ -447,6 +498,12 @@ export const ModernOrigamiApp: React.FC = () => {
             showCreases={showCreases}
             showTable={enableTable}
             paperThickness={paperThickness}
+            pinnedVertices={pinnedVertices}
+            draggedVertex={draggedVertex}
+            onTogglePin={handleTogglePin}
+            onDragStart={handleDragStart}
+            onDragMove={handleDragMove}
+            onDragEnd={handleDragEnd}
             className="h-full"
           />
 
@@ -583,7 +640,7 @@ export const ModernOrigamiApp: React.FC = () => {
               onChange={(e) => updatePhysicsParams({ enableTable: e.target.checked })}
               className="rounded text-indigo-600 focus:ring-indigo-500"
             />
-            <span>Table (z=0)</span>
+            <span>Table Contact (z &ge; thickness/2)</span>
           </label>
 
           {/* Thickness */}
@@ -654,9 +711,9 @@ export const ModernOrigamiApp: React.FC = () => {
             <span className="font-mono text-[11px]">{muKinetic.toFixed(2)}</span>
           </div>
 
-          {/* Paper Stiffness Preset Slider */}
+          {/* Bending Stiffness (N·m/rad) Preset Slider */}
           <div className="flex items-center space-x-1.5">
-            <span className="text-gray-500">Stiffness:</span>
+            <span className="text-gray-500">Bending Stiffness:</span>
             <input
               type="range"
               min={0}
@@ -665,10 +722,14 @@ export const ModernOrigamiApp: React.FC = () => {
               value={paperStiffnessPreset}
               onChange={(e) => updatePhysicsParams({ paperStiffnessPreset: parseInt(e.target.value, 10) })}
               className="w-16 h-1.5 bg-gray-200 rounded accent-indigo-600 cursor-pointer"
-              title="Tissue (0) to Card (100)"
+              title="Tissue (20 N·m/rad) to Card (200 kN·m/rad)"
             />
             <span className="font-mono text-[11px] font-medium text-indigo-700">
-              {paperStiffnessPreset < 35 ? 'Tissue' : paperStiffnessPreset < 70 ? 'Standard' : 'Card'}
+              {paperStiffnessPreset < 35
+                ? '20 N·m/rad (Tissue)'
+                : paperStiffnessPreset < 70
+                ? '2.0 kN·m/rad (Standard)'
+                : '200 kN·m/rad (Card)'}
             </span>
           </div>
 

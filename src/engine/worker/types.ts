@@ -56,6 +56,15 @@ export type WorkerRequest =
       type: 'RESUME';
     }
   | {
+      type: 'SET_PINS';
+      pins: number[];
+    }
+  | {
+      type: 'SET_DRAG';
+      vertexIndex: number;
+      targetPos: [number, number, number] | null;
+    }
+  | {
       type: 'RETURN_BUFFER';
       buffer: ArrayBufferLike;
     };

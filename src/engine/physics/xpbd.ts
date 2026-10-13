@@ -7,8 +7,9 @@ import { assertFinite, isMeshFinite } from './validation';
 export interface XPBDSolverOptions {
   substeps?: number;
   iterations?: number;
+  distanceIterations?: number;
   velocityDamping?: number;
-  fixedVertices?: Set<number>;
+  fixedVertices?: Set<number> | number[];
   
   // Phase 6: Table contact & real paper behavior
   enableTable?: boolean;
@@ -40,6 +41,7 @@ export class XPBDSolver implements FoldSolver {
   readonly dragTargets: Map<number, [number, number, number]>;
   substeps: number;
   iterations: number;
+  distanceIterations: number;
   velocityDamping: number;
 
   // Phase 6 properties
@@ -85,6 +87,7 @@ export class XPBDSolver implements FoldSolver {
     // Default to Small-Step XPBD: 10 substeps with 1 iteration each (Macklin 2019)
     this.substeps = options.substeps ?? 10;
     this.iterations = options.iterations ?? 1;
+    this.distanceIterations = options.distanceIterations ?? (this.iterations === 1 ? 4 : 1);
     this.velocityDamping = options.velocityDamping ?? 0.995;
 
     // Phase 6: Real paper table contact, friction, gravity and bending compliance
@@ -420,7 +423,7 @@ export class XPBDSolver implements FoldSolver {
           }
         }
 
-        // --- B. Table Plane Contact & Coulomb Friction Constraint (z >= tableZ + paperThickness / 2) ---
+        // --- B. Table Plane Contact & Coulomb Friction Constraint (contact is at z >= tableZ + paperThickness / 2) ---
         if (this.enableTable) {
           const zContact = this.tableZ + this.paperThickness * 0.5;
           for (let i = 0; i < numV; i++) {
@@ -454,40 +457,52 @@ export class XPBDSolver implements FoldSolver {
         }
 
         // --- C. Distance Constraints (Axial Bars - exact inextensibility alpha = 0) ---
-        // Running bars last in each iteration eliminates residual strain from bending projections
-        for (let b = 0; b < numBars; b++) {
-          const v0 = barV0[b];
-          const v1 = barV1[b];
-          const w0 = invMass[v0];
-          const w1 = invMass[v1];
-          const wSum = w0 + w1;
-          if (wSum === 0.0) continue;
+        // Running bars last with dedicated distance iterations eliminates residual strain under drag
+        for (let dIter = 0; dIter < this.distanceIterations; dIter++) {
+          for (let b = 0; b < numBars; b++) {
+            const v0 = barV0[b];
+            const v1 = barV1[b];
+            const w0 = invMass[v0];
+            const w1 = invMass[v1];
+            const wSum = w0 + w1;
+            if (wSum === 0.0) continue;
 
-          const p0 = v0 * 3;
-          const p1 = v1 * 3;
-          const dx = posStar[p0 + 0] - posStar[p1 + 0];
-          const dy = posStar[p0 + 1] - posStar[p1 + 1];
-          const dz = posStar[p0 + 2] - posStar[p1 + 2];
-          const distSq = dx * dx + dy * dy + dz * dz;
-          if (distSq < 1e-14) continue;
-          const dist = Math.sqrt(distSq);
+            const p0 = v0 * 3;
+            const p1 = v1 * 3;
+            const dx = posStar[p0 + 0] - posStar[p1 + 0];
+            const dy = posStar[p0 + 1] - posStar[p1 + 1];
+            const dz = posStar[p0 + 2] - posStar[p1 + 2];
+            const distSq = dx * dx + dy * dy + dz * dz;
+            if (distSq < 1e-14) continue;
+            const dist = Math.sqrt(distSq);
 
-          const C = dist - barRestLen[b];
-          const deltaLambda = -C / wSum;
-          this.lambdaBars[b] += deltaLambda;
+            const C = dist - barRestLen[b];
+            const deltaLambda = -C / wSum;
+            this.lambdaBars[b] += deltaLambda;
 
-          const corr = deltaLambda / dist;
-          if (w0 > 0) {
-            const f0 = w0 * corr;
-            posStar[p0 + 0] += dx * f0;
-            posStar[p0 + 1] += dy * f0;
-            posStar[p0 + 2] += dz * f0;
+            const corr = deltaLambda / dist;
+            if (w0 > 0) {
+              const f0 = w0 * corr;
+              posStar[p0 + 0] += dx * f0;
+              posStar[p0 + 1] += dy * f0;
+              posStar[p0 + 2] += dz * f0;
+            }
+            if (w1 > 0) {
+              const f1 = w1 * corr;
+              posStar[p1 + 0] -= dx * f1;
+              posStar[p1 + 1] -= dy * f1;
+              posStar[p1 + 2] -= dz * f1;
+            }
           }
-          if (w1 > 0) {
-            const f1 = w1 * corr;
-            posStar[p1 + 0] -= dx * f1;
-            posStar[p1 + 1] -= dy * f1;
-            posStar[p1 + 2] -= dz * f1;
+        }
+      }
+
+      // --- D. Post-bar table contact enforcement (contact plane is at z = tableZ + paperThickness / 2) ---
+      if (this.enableTable) {
+        const zContact = this.tableZ + this.paperThickness * 0.5;
+        for (let i = 0; i < numV; i++) {
+          if (invMass[i] > 0.0 && posStar[i * 3 + 2] < zContact) {
+            posStar[i * 3 + 2] = zContact;
           }
         }
       }
