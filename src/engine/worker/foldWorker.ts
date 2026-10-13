@@ -10,6 +10,7 @@ let isPaused = false;
 let currentAlpha = 0;
 let targetAlpha = 0;
 let stepCounter = 0;
+let lastPostTime = 0;
 let loopTimer: any = null;
 const TIME_BUDGET_MS = 8.0; // ~8 ms substep budget per tick (~120Hz physics tick)
 
@@ -51,15 +52,22 @@ function runPhysicsTick() {
   let ke = 0;
   let isConverged = false;
 
-  // Continuation ramping: smoothly slew currentAlpha toward targetAlpha to preserve physical equilibrium branch
+  // Adaptive Continuation: advance currentAlpha only as fast as solver keeps strain strictly below 1%
+  const currentStrain = solver.getMaxStrain();
+
   if (Math.abs(currentAlpha - targetAlpha) > 1e-5) {
-    const alphaSlewRate = 0.02; // max deltaAlpha per tick (~300ms for full 0 -> 1 travel)
-    if (currentAlpha < targetAlpha) {
-      currentAlpha = Math.min(targetAlpha, currentAlpha + alphaSlewRate);
-    } else {
-      currentAlpha = Math.max(targetAlpha, currentAlpha - alphaSlewRate);
+    if (currentStrain < 0.01) {
+      // Scale alpha slew rate based on available strain margin (< 1%)
+      const strainMargin = Math.max(0.1, 1.0 - currentStrain / 0.01);
+      const alphaSlewRate = 0.01 * strainMargin;
+      if (currentAlpha < targetAlpha) {
+        currentAlpha = Math.min(targetAlpha, currentAlpha + alphaSlewRate);
+      } else {
+        currentAlpha = Math.max(targetAlpha, currentAlpha - alphaSlewRate);
+      }
+      rampRestAngles(mesh, currentAlpha);
     }
-    rampRestAngles(mesh, currentAlpha);
+    // If strain >= 1%, pause alpha advance to allow solver substeps to relax mesh
   }
 
   // Run dynamic relaxation substeps until time budget is consumed
@@ -79,6 +87,9 @@ function runPhysicsTick() {
   }
 
   const tickDurationMs = performance.now() - tickStart;
+  const now = performance.now();
+  const timeBetweenPostsMs = lastPostTime > 0 ? (now - lastPostTime) : 0;
+  lastPostTime = now;
 
   // Prepare Float32 transfer buffer
   const numCoords = mesh.numVertices * 3;
@@ -98,9 +109,12 @@ function runPhysicsTick() {
     maxStrain: solver.getMaxStrain(),
     converged: isConverged,
     alpha: currentAlpha,
+    targetAlpha,
     stepCount: stepCounter,
     substepsInTick: substeps,
     tickDurationMs,
+    postTimestamp: now,
+    timeBetweenPostsMs,
   };
 
   const response: WorkerResponse = {

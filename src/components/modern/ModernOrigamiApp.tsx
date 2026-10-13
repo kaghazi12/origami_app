@@ -75,7 +75,35 @@ export const ModernOrigamiApp: React.FC = () => {
     });
 
     client.onFrame((frameEvent) => {
+      // Profiling telemetry breakdown collection
+      if (typeof window !== 'undefined') {
+        const prof = ((window as any).__ORIGAMI_PROFILING__ = (window as any).__ORIGAMI_PROFILING__ || {
+          workerTickDurationMs: [],
+          timeBetweenWorkerPostsMs: [],
+          postMessageToOnFrameMs: [],
+          mainThreadBufferCopyMs: [],
+          computeVertexNormalsMs: [],
+          threeRenderMs: [],
+          gpuTimerQueryMs: [],
+          rendererInfo: { calls: 0, triangles: 0, points: 0, lines: 0, frame: 0 },
+        });
+
+        if (frameEvent.stats.postTimestamp) {
+          prof.postMessageToOnFrameMs.push(performance.now() - frameEvent.stats.postTimestamp);
+          if (prof.postMessageToOnFrameMs.length > 500) prof.postMessageToOnFrameMs.shift();
+        }
+        if (frameEvent.stats.tickDurationMs) {
+          prof.workerTickDurationMs.push(frameEvent.stats.tickDurationMs);
+          if (prof.workerTickDurationMs.length > 500) prof.workerTickDurationMs.shift();
+        }
+        if (frameEvent.stats.timeBetweenPostsMs) {
+          prof.timeBetweenWorkerPostsMs.push(frameEvent.stats.timeBetweenPostsMs);
+          if (prof.timeBetweenWorkerPostsMs.length > 500) prof.timeBetweenWorkerPostsMs.shift();
+        }
+      }
+
       // 1. Copy into alternating client ping-pong buffer so Three.js renders a valid, non-detached buffer
+      const tCopy0 = performance.now();
       const n = frameEvent.positions.length;
       const pp = pingPongRef.current;
       if (!pp.bufA || pp.bufA.length !== n) {
@@ -85,6 +113,14 @@ export const ModernOrigamiApp: React.FC = () => {
       const clientBuf = pp.flag ? pp.bufA! : pp.bufB!;
       pp.flag = !pp.flag;
       clientBuf.set(frameEvent.positions);
+      const copyMs = performance.now() - tCopy0;
+
+      if (typeof window !== 'undefined' && (window as any).__ORIGAMI_PROFILING__) {
+        (window as any).__ORIGAMI_PROFILING__.mainThreadBufferCopyMs.push(copyMs);
+        if ((window as any).__ORIGAMI_PROFILING__.mainThreadBufferCopyMs.length > 500) {
+          (window as any).__ORIGAMI_PROFILING__.mainThreadBufferCopyMs.shift();
+        }
+      }
 
       setPositions(clientBuf);
       setStats(frameEvent.stats);
@@ -353,11 +389,14 @@ export const ModernOrigamiApp: React.FC = () => {
             <span>Seed Perturb</span>
           </button>
 
-          {/* Alpha Slider */}
+          {/* Alpha Slider with Target vs Achieved Alpha Display */}
           <div className="flex-1 flex items-center space-x-3">
-            <span className="text-xs font-semibold text-gray-600 w-16">
-              Fold (α): {(alpha * 100).toFixed(0)}%
-            </span>
+            <div className="flex flex-col text-xs font-semibold text-gray-700 min-w-[130px]">
+              <div>Target α: <span className="font-mono text-indigo-600">{(alpha * 100).toFixed(0)}%</span></div>
+              <div className="text-[11px] text-gray-500 font-normal">
+                Achieved α: <span className="font-mono text-emerald-600">{((stats?.alpha ?? 0) * 100).toFixed(1)}%</span>
+              </div>
+            </div>
             <input
               type="range"
               min={0}
@@ -371,7 +410,17 @@ export const ModernOrigamiApp: React.FC = () => {
         </div>
 
         {/* Live Convergence & Physical Status */}
-        <div className="flex items-center space-x-4 text-xs">
+        <div className="flex items-center space-x-3 text-xs">
+          {/* Max Strain Badge */}
+          <div className="flex items-center space-x-1.5 px-2.5 py-1.5 bg-gray-50 border border-gray-200 rounded-md">
+            <span className="text-gray-500">Max Strain:</span>
+            <span className={`font-mono font-semibold ${
+              (stats?.maxStrain ?? 0) < 0.01 ? 'text-emerald-600' : 'text-amber-600'
+            }`}>
+              {((stats?.maxStrain ?? 0) * 100).toFixed(2)}%
+            </span>
+          </div>
+
           {/* Convergence Status */}
           <div className="flex items-center space-x-1.5 px-3 py-1.5 bg-gray-50 border border-gray-200 rounded-md">
             {isConverged ? (

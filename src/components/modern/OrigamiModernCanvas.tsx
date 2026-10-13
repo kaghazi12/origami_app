@@ -1,5 +1,5 @@
 import React, { useRef, useEffect, useMemo } from 'react';
-import { Canvas } from '@react-three/fiber';
+import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls, Center } from '@react-three/drei';
 import * as THREE from 'three';
 import { CreaseEdgeInfo } from '../../engine/worker/types';
@@ -13,6 +13,75 @@ interface OrigamiModernCanvasProps {
   backColor?: string;
   className?: string;
 }
+
+const ThreeProfiler: React.FC = () => {
+  const { gl } = useThree();
+
+  useEffect(() => {
+    if (!gl) return;
+    const origRender = gl.render.bind(gl);
+    const glCtx = gl.getContext() as WebGL2RenderingContext;
+    const extTimer = glCtx?.getExtension?.('EXT_disjoint_timer_query_webgl2');
+
+    let activeQuery: WebGLQuery | null = null;
+
+    gl.render = (scene: THREE.Scene, camera: THREE.Camera) => {
+      // Check previous query result
+      if (extTimer && activeQuery && glCtx) {
+        const available = glCtx.getQueryParameter(activeQuery, glCtx.QUERY_RESULT_AVAILABLE);
+        const disjoint = glCtx.getParameter(extTimer.GPU_DISJOINT_EXT);
+        if (available && !disjoint) {
+          const timeElapsedNs = glCtx.getQueryParameter(activeQuery, glCtx.QUERY_RESULT);
+          const timeElapsedMs = Number(timeElapsedNs) / 1e6;
+          const prof = (window as any).__ORIGAMI_PROFILING__;
+          if (prof) {
+            prof.gpuTimerQueryMs.push(timeElapsedMs);
+            if (prof.gpuTimerQueryMs.length > 500) prof.gpuTimerQueryMs.shift();
+          }
+        }
+        if (available) {
+          glCtx.deleteQuery(activeQuery);
+          activeQuery = null;
+        }
+      }
+
+      // Start new timer query if supported
+      if (extTimer && !activeQuery && glCtx) {
+        activeQuery = glCtx.createQuery();
+        if (activeQuery) {
+          glCtx.beginQuery(extTimer.TIME_ELAPSED_EXT, activeQuery);
+        }
+      }
+
+      const t0 = performance.now();
+      origRender(scene, camera);
+      const renderMs = performance.now() - t0;
+
+      if (extTimer && activeQuery && glCtx) {
+        glCtx.endQuery(extTimer.TIME_ELAPSED_EXT);
+      }
+
+      const prof = (window as any).__ORIGAMI_PROFILING__;
+      if (prof) {
+        prof.threeRenderMs.push(renderMs);
+        if (prof.threeRenderMs.length > 500) prof.threeRenderMs.shift();
+        prof.rendererInfo = {
+          calls: gl.info.render.calls,
+          triangles: gl.info.render.triangles,
+          points: gl.info.render.points,
+          lines: gl.info.render.lines,
+          frame: gl.info.render.frame,
+        };
+      }
+    };
+
+    return () => {
+      gl.render = origRender;
+    };
+  }, [gl]);
+
+  return null;
+};
 
 const PaperMesh: React.FC<{
   indices: Uint32Array;
@@ -68,7 +137,15 @@ const PaperMesh: React.FC<{
     if (posAttr && posAttr.array.length === positions.length) {
       (posAttr.array as Float32Array).set(positions);
       posAttr.needsUpdate = true;
+      const tNorm0 = performance.now();
       geometry.computeVertexNormals();
+      const normMs = performance.now() - tNorm0;
+      if (typeof window !== 'undefined' && (window as any).__ORIGAMI_PROFILING__) {
+        (window as any).__ORIGAMI_PROFILING__.computeVertexNormalsMs.push(normMs);
+        if ((window as any).__ORIGAMI_PROFILING__.computeVertexNormalsMs.length > 500) {
+          (window as any).__ORIGAMI_PROFILING__.computeVertexNormalsMs.shift();
+        }
+      }
       geometry.computeBoundingBox();
     }
 
@@ -149,6 +226,7 @@ export const OrigamiModernCanvas: React.FC<OrigamiModernCanvasProps> = ({
         camera={{ position: [0.0, 1.5, 1.3], fov: 45 }}
         gl={{ antialias: true, alpha: true }}
       >
+        <ThreeProfiler />
         <ambientLight intensity={0.75} />
         <directionalLight position={[4, 8, 5]} intensity={1.1} castShadow />
         <directionalLight position={[-4, -4, -3]} intensity={0.4} />

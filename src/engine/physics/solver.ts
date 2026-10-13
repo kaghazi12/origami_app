@@ -10,13 +10,8 @@ export interface SolverOptions {
   massScaling?: boolean;    // Barnes fictitious mass scaling: scales node mass proportional to node stiffness
 }
 
-export interface SolveResult {
-  iterations: number;
-  converged: boolean;
-  kineticEnergy: number;
-  maxResidualForce: number;
-  maxStrain: number;
-}
+import { FoldSolver, SolveResult } from './types';
+export { type FoldSolver, type SolveResult };
 
 /**
  * Computes total effective nodal translational stiffness (N/m) across both
@@ -129,10 +124,11 @@ export function seedFromFlat(mesh: TriMesh, eps = 1e-4): void {
   }
 }
 
-export class BarHingeSolver {
+export class BarHingeSolver implements FoldSolver {
   readonly mesh: TriMesh;
   readonly forces: Float64Array;
   readonly fixedVertices: Set<number>;
+  readonly dragTargets: Map<number, [number, number, number]>;
   dt: number;
   damping: number;
   kineticDamping: boolean;
@@ -143,6 +139,7 @@ export class BarHingeSolver {
     this.mesh = mesh;
     this.forces = new Float64Array(mesh.numVertices * 3);
     this.fixedVertices = options.fixedVertices ?? new Set<number>();
+    this.dragTargets = new Map<number, [number, number, number]>();
     this.kineticDamping = options.kineticDamping ?? false;
     this.massScaling = options.massScaling ?? false;
     this.prevKineticEnergy = 0;
@@ -172,6 +169,25 @@ export class BarHingeSolver {
     this.seedFromFlat(eps);
   }
 
+  setFixedVertices(pins: Set<number>): void {
+    this.fixedVertices.clear();
+    for (const p of pins) this.fixedVertices.add(p);
+  }
+
+  setDragTarget(vertexIndex: number, targetPos: [number, number, number] | null): void {
+    if (targetPos === null) {
+      this.dragTargets.delete(vertexIndex);
+    } else {
+      this.dragTargets.set(vertexIndex, targetPos);
+      this.mesh.positions[vertexIndex * 3 + 0] = targetPos[0];
+      this.mesh.positions[vertexIndex * 3 + 1] = targetPos[1];
+      this.mesh.positions[vertexIndex * 3 + 2] = targetPos[2];
+      this.mesh.velocities[vertexIndex * 3 + 0] = 0;
+      this.mesh.velocities[vertexIndex * 3 + 1] = 0;
+      this.mesh.velocities[vertexIndex * 3 + 2] = 0;
+    }
+  }
+
   /**
    * Executes a single Dynamic Relaxation integration substep
    */
@@ -185,6 +201,17 @@ export class BarHingeSolver {
 
     for (let i = 0; i < this.mesh.numVertices; i++) {
       if (this.fixedVertices.has(i)) {
+        this.mesh.velocities[i * 3 + 0] = 0;
+        this.mesh.velocities[i * 3 + 1] = 0;
+        this.mesh.velocities[i * 3 + 2] = 0;
+        continue;
+      }
+
+      if (this.dragTargets.has(i)) {
+        const target = this.dragTargets.get(i)!;
+        this.mesh.positions[i * 3 + 0] = target[0];
+        this.mesh.positions[i * 3 + 1] = target[1];
+        this.mesh.positions[i * 3 + 2] = target[2];
         this.mesh.velocities[i * 3 + 0] = 0;
         this.mesh.velocities[i * 3 + 1] = 0;
         this.mesh.velocities[i * 3 + 2] = 0;
@@ -247,11 +274,12 @@ export class BarHingeSolver {
   getMaxResidualForce(): number {
     let maxForce = 0;
     for (let i = 0; i < this.mesh.numVertices; i++) {
-      if (this.fixedVertices.has(i)) continue;
+      if (this.fixedVertices.has(i) || this.dragTargets.has(i)) continue;
       const fx = this.forces[i * 3 + 0];
       const fy = this.forces[i * 3 + 1];
       const fz = this.forces[i * 3 + 2];
       const fMag = Math.hypot(fx, fy, fz);
+      if (Number.isNaN(fMag) || !Number.isFinite(fMag)) return Infinity;
       if (fMag > maxForce) maxForce = fMag;
     }
     return maxForce;

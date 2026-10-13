@@ -44,9 +44,12 @@ export interface WorkerFrameStats {
   maxStrain: number;
   converged: boolean;
   alpha: number;
+  targetAlpha?: number;
   stepCount: number;
   substepsInTick: number;
   tickDurationMs: number;
+  postTimestamp?: number;
+  timeBetweenPostsMs?: number;
 }
 
 export interface CreaseEdgeInfo {
