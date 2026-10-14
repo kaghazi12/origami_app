@@ -73,6 +73,10 @@ export type WorkerRequest =
       drag: import('../physics/types').BarycentricAttachment | null;
     }
   | {
+      type: 'SET_MAX_DRAG_SPEED';
+      speed: number;
+    }
+  | {
       type: 'RETURN_BUFFER';
       buffer: ArrayBufferLike;
     };

@@ -208,6 +208,13 @@ export class OrigamiWorkerClient {
     });
   }
 
+  setMaxDragSpeed(speed: number): void {
+    this.postMessage({
+      type: 'SET_MAX_DRAG_SPEED',
+      speed,
+    });
+  }
+
   /**
    * Recycles the position ArrayBuffer back to the worker for zero-allocation double-buffering
    */

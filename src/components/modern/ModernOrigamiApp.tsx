@@ -66,6 +66,7 @@ export const ModernOrigamiApp: React.FC = () => {
   const [activeTool, setActiveTool] = useState<'pivot' | 'drag'>('drag');
   const [barycentricPin, setBarycentricPin] = useState<BarycentricAttachment | null>(null);
   const [barycentricDrag, setBarycentricDrag] = useState<BarycentricAttachment | null>(null);
+  const [maxDragSpeed, setMaxDragSpeed] = useState<number>(1.0);
   const [reachRadius, setReachRadius] = useState<number | null>(null);
   const [pinnedVertices, setPinnedVertices] = useState<number[]>([]);
   const [draggedVertex, setDraggedVertex] = useState<number | null>(null);
@@ -346,6 +347,19 @@ export const ModernOrigamiApp: React.FC = () => {
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
   }, [handleClearBarycentricPin]);
+
+  useEffect(() => {
+    (window as any).__ORIGAMI_TEST_API__ = {
+      setPin: handleSetBarycentricPin,
+      dragStart: handleBarycentricDragStart,
+      dragMove: handleBarycentricDragMove,
+      dragEnd: handleBarycentricDragEnd,
+      getClient: () => clientRef.current,
+      getStats: () => stats,
+      getLatency: () => latencyMs,
+      getPositions: () => positions,
+    };
+  }, [handleSetBarycentricPin, handleBarycentricDragStart, handleBarycentricDragMove, handleBarycentricDragEnd, stats, latencyMs, positions]);
 
   // Play / Pause animation loop
   useEffect(() => {
@@ -826,6 +840,26 @@ export const ModernOrigamiApp: React.FC = () => {
               className="w-12 h-1.5 bg-gray-200 rounded accent-indigo-600 cursor-pointer"
             />
             <span className="font-mono text-[11px]">{substepsPerFrame}</span>
+          </div>
+
+          {/* Max Drag Speed (Slew Limit) */}
+          <div className="flex items-center space-x-1.5">
+            <span className="text-gray-500">Max Drag Speed:</span>
+            <input
+              type="range"
+              min={0.2}
+              max={3.0}
+              step={0.1}
+              value={maxDragSpeed}
+              onChange={(e) => {
+                const val = parseFloat(e.target.value);
+                setMaxDragSpeed(val);
+                clientRef.current?.setMaxDragSpeed(val);
+              }}
+              className="w-14 h-1.5 bg-gray-200 rounded accent-indigo-600 cursor-pointer"
+              title="Limits drag target displacement per frame to prevent shock buckling"
+            />
+            <span className="font-mono text-[11px]">{maxDragSpeed.toFixed(1)} m/s</span>
           </div>
         </div>
 

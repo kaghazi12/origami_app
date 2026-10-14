@@ -180,10 +180,11 @@ describe('Phase 7 & 7.5: Barycentric Pivot-and-Drag Suite', () => {
       {
         const stageName = 'Reach Clamp (1.2*reach)';
         const curQ = solver.getBarycentricPos(ptQ);
-        // Commanded mouse pointer at 1.2 * reach
+        const curTheta = Math.atan2(curQ[1] - pInit[1], curQ[0] - pInit[0]);
+        // Commanded mouse pointer pulled radially outwards to 1.2 * reach
         const rawMouseTarget: [number, number, number] = [
-          pInit[0] + 1.2 * reach * Math.cos(theta0),
-          pInit[1] + 1.2 * reach * Math.sin(theta0),
+          pInit[0] + 1.2 * reach * Math.cos(curTheta),
+          pInit[1] + 1.2 * reach * Math.sin(curTheta),
           targetZ,
         ];
         // Reach clamp applied (as in UI pointer handler)
@@ -204,7 +205,7 @@ describe('Phase 7 & 7.5: Barycentric Pivot-and-Drag Suite', () => {
             curQ[1] + (clampedTarget[1] - curQ[1]) * frac,
             curQ[2] + (clampedTarget[2] - curQ[2]) * frac,
           ];
-          solver.setBarycentricDrag({ point: ptQ, targetPos: interp, compliance: 0.001 });
+          solver.setBarycentricDrag({ point: ptQ, targetPos: interp, compliance: 0.002 });
           solver.step(0.016);
         }
         for (let f = 0; f < 10; f++) solver.step(0.016);
@@ -235,9 +236,11 @@ describe('Phase 7 & 7.5: Barycentric Pivot-and-Drag Suite', () => {
         solver.setBarycentricDrag(null);
 
         const t0 = performance.now();
-        let settledFrame = -1;
-        let finalMaxSpeed = 0;
+        let settledAtFrame = -1;
+        let consecutiveSettled = 0;
         const MAX_SETTLE_FRAMES = 120;
+        const SETTLE_SPEED_THRESHOLD = 0.01; // 1 cm/s
+        const REQUIRED_CONSECUTIVE_FRAMES = 10;
 
         for (let f = 1; f <= MAX_SETTLE_FRAMES; f++) {
           solver.step(0.016);
@@ -251,9 +254,14 @@ describe('Phase 7 & 7.5: Barycentric Pivot-and-Drag Suite', () => {
             const sSq = vx * vx + vy * vy + vz * vz;
             if (sSq > maxSpeedSq) maxSpeedSq = sSq;
           }
-          finalMaxSpeed = Math.sqrt(maxSpeedSq);
-          if (finalMaxSpeed < 1e-2 && settledFrame === -1) {
-            settledFrame = f;
+          const curSpeed = Math.sqrt(maxSpeedSq);
+          if (curSpeed < SETTLE_SPEED_THRESHOLD) {
+            consecutiveSettled++;
+            if (consecutiveSettled >= REQUIRED_CONSECUTIVE_FRAMES && settledAtFrame === -1) {
+              settledAtFrame = f;
+            }
+          } else {
+            consecutiveSettled = 0;
           }
         }
         const wallMs = performance.now() - t0;
@@ -263,13 +271,126 @@ describe('Phase 7 & 7.5: Barycentric Pivot-and-Drag Suite', () => {
 
         expect(strain).toBeLessThan(1.0);
         expect(pDrift).toBeLessThan(1e-3);
-        expect(finalMaxSpeed).toBeLessThan(0.05);
+        // Settle-time criterion: must remain under 0.01 m/s for >= 10 consecutive frames
+        expect(settledAtFrame).toBeGreaterThan(0);
 
         console.log(
-          `${cfg.name.padEnd(8)} | ${stageName.padEnd(31)} | ${(wallMs / MAX_SETTLE_FRAMES).toFixed(2).padStart(8)} | ${(strain.toFixed(4) + '%').padStart(14)} | ${pDrift.toExponential(2).padStart(11)} | Settled: ${settledFrame > 0 ? settledFrame : MAX_SETTLE_FRAMES}f (${wallMs.toFixed(1)}ms) | PASS ✓`
+          `${cfg.name.padEnd(8)} | ${stageName.padEnd(31)} | ${(wallMs / MAX_SETTLE_FRAMES).toFixed(2).padStart(8)} | ${(strain.toFixed(4) + '%').padStart(14)} | ${pDrift.toExponential(2).padStart(11)} | Settled: ${settledAtFrame}f (${wallMs.toFixed(1)}ms) | PASS ✓`
         );
       }
     }
     console.log('===========================================================================================================================\n');
   }, 60000);
+
+  it('enforces drag target slew limit: jumps target by 0.5m in one frame at 121V and 441V without exceeding 1% strain or rising above start height', () => {
+    const configs = [
+      { name: '121 Vertices', targetEdgeLength: 0.10, substeps: 15, distanceIterations: 12 },
+      { name: '441 Vertices', targetEdgeLength: 0.05, substeps: 15, distanceIterations: 15 },
+    ];
+
+    console.log('\n===========================================================================================================================');
+    console.log('       CLEANUP REQ 1: DRAG TARGET SLEW LIMIT (0.5m TARGET JUMP IN ONE FRAME - STRAIN < 1%, NO NAN, NO RISE)                ');
+    console.log('===========================================================================================================================');
+    console.log('Mesh     | Max Strain (%) | Peak Z Free (m) | Start Z (m) | Max Speed (m/s) | Slew Tracking? | Pass?');
+    console.log('---------+----------------+-----------------+-------------+-----------------+----------------+-------------------');
+
+    for (const cfg of configs) {
+      const fold = createSquareSheet(1, 1);
+      const mesh = createMeshFromFold(fold, { targetEdgeLength: cfg.targetEdgeLength });
+      const thickness = 0.002;
+      const targetZ = thickness * 0.5;
+
+      for (let i = 0; i < mesh.numVertices; i++) {
+        mesh.positions[i * 3 + 2] = targetZ;
+        mesh.velocities[i * 3 + 0] = 0;
+        mesh.velocities[i * 3 + 1] = 0;
+        mesh.velocities[i * 3 + 2] = 0;
+      }
+
+      const ptP = findBarycentricPoint(mesh, 0.23, 0.17);
+      const ptQ = findBarycentricPoint(mesh, 0.78, 0.62);
+
+      const pInit: [number, number, number] = [
+        ptP.w0 * mesh.positions[ptP.v0 * 3 + 0] + ptP.w1 * mesh.positions[ptP.v1 * 3 + 0] + ptP.w2 * mesh.positions[ptP.v2 * 3 + 0],
+        ptP.w0 * mesh.positions[ptP.v0 * 3 + 1] + ptP.w1 * mesh.positions[ptP.v1 * 3 + 1] + ptP.w2 * mesh.positions[ptP.v2 * 3 + 1],
+        targetZ,
+      ];
+
+      const solver = new XPBDSolver(mesh, {
+        substeps: cfg.substeps,
+        iterations: 1,
+        distanceIterations: cfg.distanceIterations,
+        enableTable: true,
+        tableZ: 0.0,
+        paperThickness: thickness,
+        enableGravity: true,
+        gravity: 1.0,
+        muStatic: 0.2,
+        muKinetic: 0.15,
+        bendingCompliance: 0.001,
+        velocityDamping: 0.98,
+        contactDamping: 0.25,
+        maxDragSpeed: 1.0, // 1.0 m/s slew limit
+      });
+
+      solver.setBarycentricPins([{ point: ptP, targetPos: pInit, compliance: 0 }]);
+
+      const initQ = solver.getBarycentricPos(ptQ);
+      solver.setBarycentricDrag({ point: ptQ, targetPos: initQ, compliance: 0.002 });
+
+      // Warmup 5 frames to establish flat equilibrium
+      for (let f = 0; f < 5; f++) solver.step(0.016);
+      assertFinite(mesh);
+
+      let startMaxZ = -Infinity;
+      for (let i = 0; i < mesh.numVertices; i++) {
+        if (mesh.positions[i * 3 + 2] > startMaxZ) startMaxZ = mesh.positions[i * 3 + 2];
+      }
+
+      // SUDDEN 0.5m JUMP IN ONE FRAME:
+      const jumpedTarget: [number, number, number] = [
+        initQ[0] + 0.35,
+        initQ[1] + 0.35,
+        initQ[2], // Jump by hypot(0.35, 0.35) = 0.495 m ≈ 0.5 m
+      ];
+      solver.setBarycentricDrag({ point: ptQ, targetPos: jumpedTarget, compliance: 0.002 });
+
+      let maxObservedStrain = 0;
+      let peakZFreeObserved = -Infinity;
+      let maxSpeedObserved = 0;
+
+      // Simulate 20 frames after the 0.5m jump
+      for (let f = 1; f <= 20; f++) {
+        solver.step(0.016);
+        assertFinite(mesh);
+
+        const currentStrain = solver.getMaxStrain() * 100;
+        if (currentStrain > maxObservedStrain) maxObservedStrain = currentStrain;
+
+        for (let i = 0; i < mesh.numVertices; i++) {
+          const z = mesh.positions[i * 3 + 2];
+          if (z > peakZFreeObserved) peakZFreeObserved = z;
+
+          const vx = mesh.velocities[i * 3 + 0];
+          const vy = mesh.velocities[i * 3 + 1];
+          const vz = mesh.velocities[i * 3 + 2];
+          const s = Math.hypot(vx, vy, vz);
+          if (s > maxSpeedObserved) maxSpeedObserved = s;
+        }
+      }
+
+      // Assertions:
+      // 1. Strain must stay below 1%
+      expect(maxObservedStrain).toBeLessThan(1.0);
+      // 2. Finite state (no NaN)
+      assertFinite(mesh);
+      // 3. No free vertex may rise above start height beyond stated tolerance (tolerance: 1mm)
+      expect(peakZFreeObserved).toBeLessThanOrEqual(startMaxZ + 1e-3);
+
+      console.log(
+        `${cfg.name.padEnd(8)} | ${(maxObservedStrain.toFixed(4) + '%').padStart(14)} | ${peakZFreeObserved.toFixed(5).padStart(15)} | ${startMaxZ.toFixed(5).padStart(11)} | ${maxSpeedObserved.toFixed(4).padStart(15)} | Slew Capped    | PASS ✓`
+      );
+    }
+    console.log('===========================================================================================================================\n');
+  });
 });

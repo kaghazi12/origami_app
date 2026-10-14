@@ -21,6 +21,7 @@ export interface XPBDSolverOptions {
   muKinetic?: number;
   bendingCompliance?: number;
   contactDamping?: number;
+  maxDragSpeed?: number;
 }
 
 /**
@@ -35,6 +36,7 @@ export interface XPBDSolverOptions {
  * - Phase 6 Real Paper Physics: One-sided table plane contact constraint (z >= paperThickness/2),
  *   Coulomb position-based static & kinetic friction, gravity, and tunable facet bending compliance.
  * - Phase 7: Arbitrary barycentric attachment (P) and soft drag (Q) constraints with reach clamping.
+ * - Phase 8: Drag target slew limit capping target displacement per frame (maxDragSpeed).
  */
 export class XPBDSolver implements FoldSolver {
   readonly mesh: TriMesh;
@@ -42,6 +44,8 @@ export class XPBDSolver implements FoldSolver {
   readonly dragTargets: Map<number, [number, number, number]>;
   barycentricPins: BarycentricAttachment[] = [];
   barycentricDrag: BarycentricAttachment | null = null;
+  maxDragSpeed: number;
+  private effectiveDragTarget: [number, number, number] | null = null;
   substeps: number;
   iterations: number;
   distanceIterations: number;
@@ -113,6 +117,7 @@ export class XPBDSolver implements FoldSolver {
     this.muKinetic = options.muKinetic ?? 0.4;
     this.bendingCompliance = options.bendingCompliance;
     this.contactDamping = options.contactDamping ?? 0.2;
+    this.maxDragSpeed = options.maxDragSpeed ?? 1.5;
 
     this.posStar = new Float64Array(numV * 3);
     this.forcesBuffer = new Float64Array(numV * 3);
@@ -237,8 +242,21 @@ export class XPBDSolver implements FoldSolver {
     this.barycentricPins = pins;
   }
 
+  setMaxDragSpeed(speed: number): void {
+    this.maxDragSpeed = Math.max(0.01, speed);
+  }
+
+  getEffectiveDragTarget(): [number, number, number] | null {
+    return this.effectiveDragTarget ? [...this.effectiveDragTarget] : null;
+  }
+
   setBarycentricDrag(drag: BarycentricAttachment | null): void {
     this.barycentricDrag = drag;
+    if (!drag) {
+      this.effectiveDragTarget = null;
+    } else if (!this.effectiveDragTarget) {
+      this.effectiveDragTarget = [drag.targetPos[0], drag.targetPos[1], drag.targetPos[2]];
+    }
   }
 
   getBarycentricPos(pt: BarycentricPoint): [number, number, number] {
@@ -292,6 +310,7 @@ export class XPBDSolver implements FoldSolver {
 
     if (this.barycentricDrag) {
       const drag = this.barycentricDrag;
+      const target = this.effectiveDragTarget ?? drag.targetPos;
       const pt = drag.point;
       const v0 = pt.v0, v1 = pt.v1, v2 = pt.v2;
       const w0 = pt.w0, w1 = pt.w1, w2 = pt.w2;
@@ -301,9 +320,9 @@ export class XPBDSolver implements FoldSolver {
       const curY = w0 * posStar[p0 + 1] + w1 * posStar[p1 + 1] + w2 * posStar[p2 + 1];
       const curZ = w0 * posStar[p0 + 2] + w1 * posStar[p1 + 2] + w2 * posStar[p2 + 2];
 
-      const cx = curX - drag.targetPos[0];
-      const cy = curY - drag.targetPos[1];
-      const cz = curZ - drag.targetPos[2];
+      const cx = curX - target[0];
+      const cy = curY - target[1];
+      const cz = curZ - target[2];
 
       const alphaTilde = (drag.compliance ?? 0.0) / hSq;
       const denom = 1.0 + alphaTilde;
@@ -339,6 +358,33 @@ export class XPBDSolver implements FoldSolver {
    */
   step(dt = 0.016): { potentialEnergy: number; kineticEnergy: number } {
     this.syncHingeRestAngles();
+
+    // Slew limit for barycentric drag target: cap how far target moves per second
+    if (this.barycentricDrag) {
+      if (!this.effectiveDragTarget) {
+        this.effectiveDragTarget = [
+          this.barycentricDrag.targetPos[0],
+          this.barycentricDrag.targetPos[1],
+          this.barycentricDrag.targetPos[2],
+        ];
+      } else {
+        const dx = this.barycentricDrag.targetPos[0] - this.effectiveDragTarget[0];
+        const dy = this.barycentricDrag.targetPos[1] - this.effectiveDragTarget[1];
+        const dz = this.barycentricDrag.targetPos[2] - this.effectiveDragTarget[2];
+        const dist = Math.hypot(dx, dy, dz);
+        const maxStepDist = this.maxDragSpeed * dt;
+        if (dist > maxStepDist && dist > 1e-12) {
+          const factor = maxStepDist / dist;
+          this.effectiveDragTarget[0] += dx * factor;
+          this.effectiveDragTarget[1] += dy * factor;
+          this.effectiveDragTarget[2] += dz * factor;
+        } else {
+          this.effectiveDragTarget[0] = this.barycentricDrag.targetPos[0];
+          this.effectiveDragTarget[1] = this.barycentricDrag.targetPos[1];
+          this.effectiveDragTarget[2] = this.barycentricDrag.targetPos[2];
+        }
+      }
+    }
 
     const substepCount = Math.max(1, this.substeps);
     const h = dt / substepCount;

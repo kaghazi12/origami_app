@@ -346,6 +346,12 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
         break;
       }
 
+      case 'SET_MAX_DRAG_SPEED': {
+        if (!solver || !(solver instanceof XPBDSolver)) return;
+        solver.setMaxDragSpeed(req.speed);
+        break;
+      }
+
       case 'SEED_FROM_FLAT': {
         if (!mesh || !solver) return;
         seedFromFlat(mesh, req.eps ?? 1e-3);
