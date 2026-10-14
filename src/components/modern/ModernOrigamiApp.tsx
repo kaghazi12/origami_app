@@ -29,6 +29,8 @@ const SAMPLES = [
   { id: 'preliminary', name: 'Preliminary Base', creator: () => createPreliminaryBasePattern(1) },
 ];
 
+import { BarycentricAttachment } from '../../engine/physics/types';
+
 export const ModernOrigamiApp: React.FC = () => {
   const [selectedSampleId, setSelectedSampleId] = useState<string>('flat');
   const [currentFold, setCurrentFold] = useState<FoldFormat>(() => createSquareSheet(1, 1));
@@ -60,7 +62,11 @@ export const ModernOrigamiApp: React.FC = () => {
   const [paperStiffnessPreset, setPaperStiffnessPreset] = useState<number>(50); // 0 (tissue) to 100 (card)
   const [substepsPerFrame, setSubstepsPerFrame] = useState<number>(10);
 
-  // Phase 7: Pivot-and-drag interaction state
+  // Phase 7: Pivot-and-drag interaction state (barycentric points + tool mode)
+  const [activeTool, setActiveTool] = useState<'pivot' | 'drag'>('drag');
+  const [barycentricPin, setBarycentricPin] = useState<BarycentricAttachment | null>(null);
+  const [barycentricDrag, setBarycentricDrag] = useState<BarycentricAttachment | null>(null);
+  const [reachRadius, setReachRadius] = useState<number | null>(null);
   const [pinnedVertices, setPinnedVertices] = useState<number[]>([]);
   const [draggedVertex, setDraggedVertex] = useState<number | null>(null);
 
@@ -293,12 +299,53 @@ export const ModernOrigamiApp: React.FC = () => {
     clientRef.current?.setDrag(vIndex, targetPos);
   }, []);
 
-  const handleDragEnd = useCallback(() => {
-    if (draggedVertex !== null) {
-      clientRef.current?.setDrag(draggedVertex, null);
-      setDraggedVertex(null);
+  const handleSetBarycentricPin = useCallback((pin: BarycentricAttachment | null) => {
+    setBarycentricPin(pin);
+    if (!pin) setReachRadius(null);
+    clientRef.current?.setBarycentricPins(pin ? [pin] : []);
+  }, []);
+
+  const handleClearBarycentricPin = useCallback(() => {
+    setBarycentricPin(null);
+    setReachRadius(null);
+    clientRef.current?.setBarycentricPins([]);
+  }, []);
+
+  const handleBarycentricDragStart = useCallback((drag: BarycentricAttachment) => {
+    setBarycentricDrag(drag);
+    if (barycentricPin && drag.point.restU !== undefined && barycentricPin.point.restU !== undefined) {
+      const reach = Math.hypot(
+        drag.point.restU - barycentricPin.point.restU,
+        drag.point.restV! - barycentricPin.point.restV!
+      );
+      setReachRadius(reach);
     }
-  }, [draggedVertex]);
+    clientRef.current?.setBarycentricDrag(drag);
+  }, [barycentricPin]);
+
+  const handleBarycentricDragMove = useCallback((targetPos: [number, number, number]) => {
+    setBarycentricDrag((prev) => {
+      if (!prev) return null;
+      const updated = { ...prev, targetPos };
+      clientRef.current?.setBarycentricDrag(updated);
+      return updated;
+    });
+  }, []);
+
+  const handleBarycentricDragEnd = useCallback(() => {
+    setBarycentricDrag(null);
+    clientRef.current?.setBarycentricDrag(null);
+  }, []);
+
+  useEffect(() => {
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') {
+        handleClearBarycentricPin();
+      }
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [handleClearBarycentricPin]);
 
   // Play / Pause animation loop
   useEffect(() => {
@@ -465,19 +512,49 @@ export const ModernOrigamiApp: React.FC = () => {
             <span>Load .FOLD</span>
           </button>
 
-          {pinnedVertices.length > 0 && (
+          {/* Tool selector: Pivot vs Drag */}
+          <div className="flex items-center bg-gray-100 p-0.5 rounded-md border border-gray-300">
             <button
-              onClick={handleClearPins}
-              className="px-2.5 py-1 text-xs font-medium text-red-600 bg-red-50 hover:bg-red-100 rounded-md border border-red-200 transition-colors"
-              title="Clear all pinned vertices"
+              onClick={() => setActiveTool('pivot')}
+              className={`flex items-center space-x-1 px-2.5 py-1 text-xs font-medium rounded transition-colors ${
+                activeTool === 'pivot'
+                  ? 'bg-amber-600 text-white shadow-sm'
+                  : 'text-gray-700 hover:bg-gray-200'
+              }`}
+              title="Pivot Tool: Click paper to place pivot pin P (Esc to clear)"
             >
-              Clear Pins ({pinnedVertices.length})
+              <span>📍 Pivot</span>
+            </button>
+            <button
+              onClick={() => setActiveTool('drag')}
+              className={`flex items-center space-x-1 px-2.5 py-1 text-xs font-medium rounded transition-colors ${
+                activeTool === 'drag'
+                  ? 'bg-indigo-600 text-white shadow-sm'
+                  : 'text-gray-700 hover:bg-gray-200'
+              }`}
+              title="Drag Tool: Left-drag paper to pull Q with lift (Right-drag to orbit)"
+            >
+              <span>✋ Drag</span>
+            </button>
+          </div>
+
+          {barycentricPin && (
+            <button
+              onClick={handleClearBarycentricPin}
+              className="px-2.5 py-1 text-xs font-medium text-amber-700 bg-amber-50 hover:bg-amber-100 rounded-md border border-amber-300 transition-colors"
+              title="Clear active pivot pin P (Esc)"
+            >
+              ✕ Clear Pin P
             </button>
           )}
 
           <div className="hidden xl:flex items-center space-x-1 text-[11px] text-gray-500 bg-gray-50 px-2 py-1 rounded border border-gray-200">
-            <span className="font-semibold text-indigo-600">Interaction:</span>
-            <span>Shift+Click to Pin P, Drag to Pull Q</span>
+            <span className="font-semibold text-indigo-600">Tool:</span>
+            <span>
+              {activeTool === 'pivot'
+                ? '📍 Click paper to set Pin P (Esc to clear)'
+                : '✋ Left-drag paper to fold/lift Q (Right-drag to orbit)'}
+            </span>
           </div>
         </div>
       </div>
@@ -494,16 +571,19 @@ export const ModernOrigamiApp: React.FC = () => {
           <OrigamiModernCanvas
             indices={loadedInfo?.indices ?? null}
             positions={positions}
+            uvs={loadedInfo?.uvs ?? null}
             creaseEdges={loadedInfo?.creaseEdges ?? []}
             showCreases={showCreases}
             showTable={enableTable}
             paperThickness={paperThickness}
-            pinnedVertices={pinnedVertices}
-            draggedVertex={draggedVertex}
-            onTogglePin={handleTogglePin}
-            onDragStart={handleDragStart}
-            onDragMove={handleDragMove}
-            onDragEnd={handleDragEnd}
+            activeTool={activeTool}
+            barycentricPin={barycentricPin}
+            barycentricDrag={barycentricDrag}
+            reachRadius={reachRadius}
+            onSetBarycentricPin={handleSetBarycentricPin}
+            onBarycentricDragStart={handleBarycentricDragStart}
+            onBarycentricDragMove={handleBarycentricDragMove}
+            onBarycentricDragEnd={handleBarycentricDragEnd}
             className="h-full"
           />
 
@@ -711,9 +791,9 @@ export const ModernOrigamiApp: React.FC = () => {
             <span className="font-mono text-[11px]">{muKinetic.toFixed(2)}</span>
           </div>
 
-          {/* Bending Stiffness (N·m/rad) Preset Slider */}
+          {/* Bending Compliance Preset Slider (Dimensionless) */}
           <div className="flex items-center space-x-1.5">
-            <span className="text-gray-500">Bending Stiffness:</span>
+            <span className="text-gray-500">Bending Preset:</span>
             <input
               type="range"
               min={0}
@@ -722,14 +802,14 @@ export const ModernOrigamiApp: React.FC = () => {
               value={paperStiffnessPreset}
               onChange={(e) => updatePhysicsParams({ paperStiffnessPreset: parseInt(e.target.value, 10) })}
               className="w-16 h-1.5 bg-gray-200 rounded accent-indigo-600 cursor-pointer"
-              title="Tissue (20 N·m/rad) to Card (200 kN·m/rad)"
+              title="Dimensionless compliance presets: Tissue (0.05) to Card (1e-5)"
             />
             <span className="font-mono text-[11px] font-medium text-indigo-700">
               {paperStiffnessPreset < 35
-                ? '20 N·m/rad (Tissue)'
+                ? 'Tissue (0.05)'
                 : paperStiffnessPreset < 70
-                ? '2.0 kN·m/rad (Standard)'
-                : '200 kN·m/rad (Card)'}
+                ? 'Standard (0.001)'
+                : 'Card (1e-5)'}
             </span>
           </div>
 

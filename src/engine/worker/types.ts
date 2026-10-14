@@ -65,6 +65,14 @@ export type WorkerRequest =
       targetPos: [number, number, number] | null;
     }
   | {
+      type: 'SET_BARYCENTRIC_PINS';
+      pins: import('../physics/types').BarycentricAttachment[];
+    }
+  | {
+      type: 'SET_BARYCENTRIC_DRAG';
+      drag: import('../physics/types').BarycentricAttachment | null;
+    }
+  | {
       type: 'RETURN_BUFFER';
       buffer: ArrayBufferLike;
     };

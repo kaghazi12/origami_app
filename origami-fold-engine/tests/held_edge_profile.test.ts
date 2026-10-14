@@ -1,4 +1,4 @@
-import { describe, it } from 'vitest';
+import { describe, it, expect } from 'vitest';
 import { createSquareSheet } from '../../src/engine/fold';
 import { createMeshFromFold } from '../../src/engine/mesh';
 import { XPBDSolver, computeDihedralAngle, assertFinite } from '../../src/engine/physics';
@@ -64,9 +64,43 @@ describe('Held Edge Profile: Tissue, Standard, Card Comparison', () => {
           contactDamping: 0.3,
         });
 
-        // Step 80 frames to settle
-        for (let f = 0; f < 80; f++) solver.step(0.016);
+        // Initialize sheet resting flat on table
+        for (let i = 0; i < mesh.numVertices; i++) {
+          mesh.positions[i * 3 + 2] = targetZ;
+        }
+
+        // Quasistatic smooth lift of held edge to avoid unphysical 123% tensile shock wave
+        const LIFT_FRAMES = 30;
+        const SETTLE_FRAMES = 50;
+        let peakZFreeDuringSim = -Infinity;
+        let peakSpeedDuringSim = 0;
+
+        for (let f = 0; f < LIFT_FRAMES + SETTLE_FRAMES; f++) {
+          if (f < LIFT_FRAMES) {
+            const curHeldZ = targetZ + (heldHeight - targetZ) * ((f + 1) / LIFT_FRAMES);
+            for (const pin of fixedPins) {
+              mesh.positions[pin * 3 + 2] = curHeldZ;
+            }
+          }
+
+          solver.step(0.016);
+
+          for (let i = 0; i < mesh.numVertices; i++) {
+            const z = mesh.positions[i * 3 + 2];
+            const vx = mesh.velocities[i * 3 + 0];
+            const vy = mesh.velocities[i * 3 + 1];
+            const vz = mesh.velocities[i * 3 + 2];
+            const spd = Math.hypot(vx, vy, vz);
+            if (spd > peakSpeedDuringSim) peakSpeedDuringSim = spd;
+            if (!fixedPins.has(i)) {
+              if (z > peakZFreeDuringSim) peakZFreeDuringSim = z;
+            }
+          }
+        }
         assertFinite(mesh);
+
+        // Core Physical Assertion: No free vertex may rise above held height under downward gravity
+        expect(peakZFreeDuringSim).toBeLessThanOrEqual(heldHeight + 1e-4);
 
         // Compute Z profile at exact percentage buckets along sheet material coordinates
         function getAvgZ(targetFrac: number): number {
@@ -95,7 +129,7 @@ describe('Held Edge Profile: Tissue, Standard, Card Comparison', () => {
           if (Math.abs(angle) > maxDihedralDeg) maxDihedralDeg = Math.abs(angle);
         }
 
-        // Lift-off distance: distance from free edge where paper first leaves the table (z > targetZ + 0.002m)
+        // Lift-off distance: distance from held edge where paper touches table (z <= targetZ + 0.001m)
         let liftOffX = 1.0;
         for (let i = 0; i < mesh.numVertices; i++) {
           const x = mesh.positions[i * 3 + 0];
@@ -105,6 +139,15 @@ describe('Held Edge Profile: Tissue, Standard, Card Comparison', () => {
           }
         }
         const liftOffDistFromHeld = liftOffX;
+
+        // In Mode A (Simple Hinge), compare against rigid-ramp height z_ramp(x) = heldHeight - (heldHeight - targetZ)*(x/liftOffX)
+        if (mode.startsWith('Simple-Hinge')) {
+          const rigidRampZ10 = heldHeight - (heldHeight - targetZ) * (0.10 / liftOffDistFromHeld);
+          const rigidRampZ25 = heldHeight - (heldHeight - targetZ) * (0.25 / liftOffDistFromHeld);
+          // Due to downward gravity catenary sag, actual z must be <= rigid ramp
+          expect(z10).toBeLessThanOrEqual(rigidRampZ10 + 1e-3);
+          expect(z25).toBeLessThanOrEqual(rigidRampZ25 + 1e-3);
+        }
 
         console.log(
           `${p.name.padEnd(8)} | ${z0.toFixed(4)}   | ${z10.toFixed(4)} | ${z25.toFixed(4)} | ${z50.toFixed(4)} | ${z75.toFixed(4)} | ${z100.toFixed(4)}     | ${(maxDihedralDeg.toFixed(2) + '°').padStart(12)} | ${liftOffDistFromHeld.toFixed(3)} m`

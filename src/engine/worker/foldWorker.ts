@@ -332,6 +332,20 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
         break;
       }
 
+      case 'SET_BARYCENTRIC_PINS': {
+        if (!solver) return;
+        solver.setBarycentricPins?.(req.pins);
+        wakeFromSleep();
+        break;
+      }
+
+      case 'SET_BARYCENTRIC_DRAG': {
+        if (!solver) return;
+        solver.setBarycentricDrag?.(req.drag);
+        wakeFromSleep();
+        break;
+      }
+
       case 'SEED_FROM_FLAT': {
         if (!mesh || !solver) return;
         seedFromFlat(mesh, req.eps ?? 1e-3);

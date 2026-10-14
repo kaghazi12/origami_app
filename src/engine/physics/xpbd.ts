@@ -1,7 +1,7 @@
 import { TriMesh } from '../types';
 import { accumulateBarForces, computeMaxBarStrain } from './bars';
 import { accumulateHingeForces, computeDihedralAngle } from './hinges';
-import { FoldSolver, SolveResult } from './types';
+import { FoldSolver, SolveResult, BarycentricPoint, BarycentricAttachment } from './types';
 import { assertFinite, isMeshFinite } from './validation';
 
 export interface XPBDSolverOptions {
@@ -34,11 +34,14 @@ export interface XPBDSolverOptions {
  * - Exact Inextensibility: Final bar distance projection guarantees max bar strain < 0.01% (compliance alpha = 0).
  * - Phase 6 Real Paper Physics: One-sided table plane contact constraint (z >= paperThickness/2),
  *   Coulomb position-based static & kinetic friction, gravity, and tunable facet bending compliance.
+ * - Phase 7: Arbitrary barycentric attachment (P) and soft drag (Q) constraints with reach clamping.
  */
 export class XPBDSolver implements FoldSolver {
   readonly mesh: TriMesh;
   readonly fixedVertices: Set<number>;
   readonly dragTargets: Map<number, [number, number, number]>;
+  barycentricPins: BarycentricAttachment[] = [];
+  barycentricDrag: BarycentricAttachment | null = null;
   substeps: number;
   iterations: number;
   distanceIterations: number;
@@ -230,6 +233,98 @@ export class XPBDSolver implements FoldSolver {
     }
   }
 
+  setBarycentricPins(pins: BarycentricAttachment[]): void {
+    this.barycentricPins = pins;
+  }
+
+  setBarycentricDrag(drag: BarycentricAttachment | null): void {
+    this.barycentricDrag = drag;
+  }
+
+  getBarycentricPos(pt: BarycentricPoint): [number, number, number] {
+    const p0 = pt.v0 * 3, p1 = pt.v1 * 3, p2 = pt.v2 * 3;
+    const pos = this.mesh.positions;
+    return [
+      pt.w0 * pos[p0 + 0] + pt.w1 * pos[p1 + 0] + pt.w2 * pos[p2 + 0],
+      pt.w0 * pos[p0 + 1] + pt.w1 * pos[p1 + 1] + pt.w2 * pos[p2 + 1],
+      pt.w0 * pos[p0 + 2] + pt.w1 * pos[p1 + 2] + pt.w2 * pos[p2 + 2],
+    ];
+  }
+
+  private projectBarycentric(posStar: Float64Array | Float32Array, hSq: number): void {
+    const invMass = this.invMass;
+    for (let pi = 0; pi < this.barycentricPins.length; pi++) {
+      const pin = this.barycentricPins[pi];
+      const pt = pin.point;
+      const v0 = pt.v0, v1 = pt.v1, v2 = pt.v2;
+      const w0 = pt.w0, w1 = pt.w1, w2 = pt.w2;
+      const im0 = invMass[v0], im1 = invMass[v1], im2 = invMass[v2];
+      const wEff = w0 * w0 * im0 + w1 * w1 * im1 + w2 * w2 * im2;
+      if (wEff < 1e-12) continue;
+
+      const p0 = v0 * 3, p1 = v1 * 3, p2 = v2 * 3;
+      const curX = w0 * posStar[p0 + 0] + w1 * posStar[p1 + 0] + w2 * posStar[p2 + 0];
+      const curY = w0 * posStar[p0 + 1] + w1 * posStar[p1 + 1] + w2 * posStar[p2 + 1];
+      const curZ = w0 * posStar[p0 + 2] + w1 * posStar[p1 + 2] + w2 * posStar[p2 + 2];
+
+      const cx = curX - pin.targetPos[0];
+      const cy = curY - pin.targetPos[1];
+      const cz = curZ - pin.targetPos[2];
+
+      const alphaTilde = (pin.compliance ?? 0.0) / hSq;
+      const denom = 1.0 + alphaTilde;
+      const dLambdaX = -cx / denom;
+      const dLambdaY = -cy / denom;
+      const dLambdaZ = -cz / denom;
+
+      posStar[p0 + 0] += dLambdaX;
+      posStar[p0 + 1] += dLambdaY;
+      posStar[p0 + 2] += dLambdaZ;
+
+      posStar[p1 + 0] += dLambdaX;
+      posStar[p1 + 1] += dLambdaY;
+      posStar[p1 + 2] += dLambdaZ;
+
+      posStar[p2 + 0] += dLambdaX;
+      posStar[p2 + 1] += dLambdaY;
+      posStar[p2 + 2] += dLambdaZ;
+    }
+
+    if (this.barycentricDrag) {
+      const drag = this.barycentricDrag;
+      const pt = drag.point;
+      const v0 = pt.v0, v1 = pt.v1, v2 = pt.v2;
+      const w0 = pt.w0, w1 = pt.w1, w2 = pt.w2;
+
+      const p0 = v0 * 3, p1 = v1 * 3, p2 = v2 * 3;
+      const curX = w0 * posStar[p0 + 0] + w1 * posStar[p1 + 0] + w2 * posStar[p2 + 0];
+      const curY = w0 * posStar[p0 + 1] + w1 * posStar[p1 + 1] + w2 * posStar[p2 + 1];
+      const curZ = w0 * posStar[p0 + 2] + w1 * posStar[p1 + 2] + w2 * posStar[p2 + 2];
+
+      const cx = curX - drag.targetPos[0];
+      const cy = curY - drag.targetPos[1];
+      const cz = curZ - drag.targetPos[2];
+
+      const alphaTilde = (drag.compliance ?? 0.0) / hSq;
+      const denom = 1.0 + alphaTilde;
+      const dLambdaX = -cx / denom;
+      const dLambdaY = -cy / denom;
+      const dLambdaZ = -cz / denom;
+
+      posStar[p0 + 0] += dLambdaX;
+      posStar[p0 + 1] += dLambdaY;
+      posStar[p0 + 2] += dLambdaZ;
+
+      posStar[p1 + 0] += dLambdaX;
+      posStar[p1 + 1] += dLambdaY;
+      posStar[p1 + 2] += dLambdaZ;
+
+      posStar[p2 + 0] += dLambdaX;
+      posStar[p2 + 1] += dLambdaY;
+      posStar[p2 + 2] += dLambdaZ;
+    }
+  }
+
   /**
    * Synchronizes hinge rest angles from mesh elements if modified externally
    */
@@ -302,6 +397,9 @@ export class XPBDSolver implements FoldSolver {
 
       // 2. Constraint Projection Loop
       for (let iter = 0; iter < this.iterations; iter++) {
+        // --- 0. Barycentric Pin & Drag Constraints ---
+        this.projectBarycentric(posStar, hSq);
+
         // --- A. Dihedral Bending Constraints (Hinges - compliant XPBD) ---
         // Projected first so that distance constraints enforce strict inextensibility at the end
         for (let hi = 0; hi < numHinges; hi++) {
@@ -494,7 +592,9 @@ export class XPBDSolver implements FoldSolver {
               posStar[p1 + 2] -= dz * f1;
             }
           }
+          this.projectBarycentric(posStar, hSq);
         }
+        this.projectBarycentric(posStar, hSq);
       }
 
       // --- D. Post-bar table contact enforcement (contact plane is at z = tableZ + paperThickness / 2) ---

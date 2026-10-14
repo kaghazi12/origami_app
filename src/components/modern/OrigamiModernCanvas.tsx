@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useMemo } from 'react';
+import React, { useRef, useEffect, useMemo, useState } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls, Center } from '@react-three/drei';
 import * as THREE from 'three';
@@ -74,12 +74,58 @@ const ThreeProfiler: React.FC = () => {
   return null;
 };
 
+import { BarycentricAttachment } from '../../engine/physics/types';
+
+function computeBarycentric(p: THREE.Vector3, a: THREE.Vector3, b: THREE.Vector3, c: THREE.Vector3): [number, number, number] {
+  const v0 = new THREE.Vector3().subVectors(b, a);
+  const v1 = new THREE.Vector3().subVectors(c, a);
+  const v2 = new THREE.Vector3().subVectors(p, a);
+
+  const d00 = v0.dot(v0);
+  const d01 = v0.dot(v1);
+  const d11 = v1.dot(v1);
+  const d20 = v2.dot(v0);
+  const d21 = v2.dot(v1);
+
+  const denom = d00 * d11 - d01 * d01;
+  if (Math.abs(denom) < 1e-12) return [0.3333, 0.3333, 0.3334];
+
+  const w1 = Math.max(0, Math.min(1, (d11 * d20 - d01 * d21) / denom));
+  const w2 = Math.max(0, Math.min(1, (d00 * d21 - d01 * d20) / denom));
+  const w0 = Math.max(0, Math.min(1, 1.0 - w1 - w2));
+  const sum = w0 + w1 + w2;
+  return [w0 / sum, w1 / sum, w2 / sum];
+}
+
+const ReachCircle: React.FC<{ center: [number, number, number]; radius: number }> = ({ center, radius }) => {
+  const lineGeo = useMemo(() => {
+    const points: THREE.Vector3[] = [];
+    const segments = 64;
+    for (let i = 0; i <= segments; i++) {
+      const theta = (i / segments) * Math.PI * 2;
+      points.push(new THREE.Vector3(radius * Math.cos(theta), 0, radius * Math.sin(theta)));
+    }
+    const geo = new THREE.BufferGeometry().setFromPoints(points);
+    const line = new THREE.LineLoop(geo);
+    line.computeLineDistances();
+    return geo;
+  }, [radius]);
+
+  return (
+    <group position={center}>
+      <lineLoop geometry={lineGeo}>
+        <lineDashedMaterial color="#d97706" dashSize={0.03} gapSize={0.02} />
+      </lineLoop>
+    </group>
+  );
+};
+
 const PinMarker: React.FC<{ position: [number, number, number] }> = ({ position }) => {
   return (
     <group position={position}>
       <mesh position={[0, 0.04, 0]}>
         <sphereGeometry args={[0.015, 16, 16]} />
-        <meshStandardMaterial color="#dc2626" roughness={0.3} metalness={0.2} />
+        <meshStandardMaterial color="#f59e0b" roughness={0.2} metalness={0.6} emissive="#b45309" emissiveIntensity={0.5} />
       </mesh>
       <mesh position={[0, 0.02, 0]}>
         <cylinderGeometry args={[0.002, 0.002, 0.04, 8]} />
@@ -96,6 +142,11 @@ const DragHandleMarker: React.FC<{ position: [number, number, number] }> = ({ po
         <sphereGeometry args={[0.02, 16, 16]} />
         <meshStandardMaterial color="#06b6d4" roughness={0.2} metalness={0.5} emissive="#0891b2" emissiveIntensity={0.6} />
       </mesh>
+      {/* Visual orientation ring */}
+      <mesh rotation={[-Math.PI / 2, 0, 0]}>
+        <ringGeometry args={[0.025, 0.03, 24]} />
+        <meshBasicMaterial color="#22d3ee" side={THREE.DoubleSide} />
+      </mesh>
     </group>
   );
 };
@@ -103,98 +154,180 @@ const DragHandleMarker: React.FC<{ position: [number, number, number] }> = ({ po
 const PaperMesh: React.FC<{
   indices: Uint32Array;
   positions: Float32Array;
+  uvs?: Float32Array | null;
   creaseEdges: CreaseEdgeInfo[];
   showCreases: boolean;
   frontColor: string;
   backColor: string;
   paperThickness: number;
-  onTogglePin?: (vertexIndex: number) => void;
-  onDragStart?: (vertexIndex: number) => void;
-  onDragMove?: (vertexIndex: number, targetPos: [number, number, number]) => void;
-  onDragEnd?: () => void;
+  activeTool?: 'pivot' | 'drag';
+  barycentricPin?: BarycentricAttachment | null;
+  barycentricDrag?: BarycentricAttachment | null;
+  onSetBarycentricPin?: (pin: BarycentricAttachment | null) => void;
+  onBarycentricDragStart?: (drag: BarycentricAttachment) => void;
+  onBarycentricDragMove?: (targetPos: [number, number, number]) => void;
+  onBarycentricDragEnd?: () => void;
   orbitControlsRef: React.MutableRefObject<any>;
+  onDragStateChange?: (dragging: boolean) => void;
 }> = ({
   indices,
   positions,
+  uvs,
   creaseEdges,
   showCreases,
   frontColor,
   backColor,
   paperThickness,
-  onTogglePin,
-  onDragStart,
-  onDragMove,
-  onDragEnd,
+  activeTool = 'drag',
+  barycentricPin = null,
+  barycentricDrag = null,
+  onSetBarycentricPin,
+  onBarycentricDragStart,
+  onBarycentricDragMove,
+  onBarycentricDragEnd,
   orbitControlsRef,
+  onDragStateChange,
 }) => {
   const isDraggingRef = useRef(false);
-  const activeDragVRef = useRef<number | null>(null);
-  const dragPlaneYRef = useRef(0);
+  const activeDragRef = useRef<BarycentricAttachment | null>(null);
+  const dragPlaneRef = useRef<THREE.Plane | null>(null);
+  const latestTargetRef = useRef<[number, number, number] | null>(null);
+  const rafIdRef = useRef<number | null>(null);
+  const { camera } = useThree();
 
   const handlePointerDown = (e: any) => {
+    if (e.nativeEvent?.button !== 0) return; // Right click orbits
     e.stopPropagation();
     if (!e.face) return;
-    const hitPoint = e.point;
 
-    const physX = hitPoint.x + 0.58;
-    const physY = -(hitPoint.z + 0.50);
+    const hitWorld = e.point;
+    const physPos: [number, number, number] = [
+      hitWorld.x + 0.58,
+      -(hitWorld.z + 0.50),
+      Math.max(paperThickness * 0.5, hitWorld.y),
+    ];
 
-    const candidates = [e.face.a, e.face.b, e.face.c];
-    let nearestV = candidates[0];
-    let minDist = Infinity;
-    for (const v of candidates) {
-      const vx = positions[v * 3 + 0];
-      const vy = positions[v * 3 + 1];
-      const dist = Math.hypot(vx - physX, vy - physY);
-      if (dist < minDist) {
-        minDist = dist;
-        nearestV = v;
-      }
+    const a = e.face.a;
+    const b = e.face.b;
+    const c = e.face.c;
+
+    const pA = new THREE.Vector3(positions[a * 3 + 0], positions[a * 3 + 1], positions[a * 3 + 2]);
+    const pB = new THREE.Vector3(positions[b * 3 + 0], positions[b * 3 + 1], positions[b * 3 + 2]);
+    const pC = new THREE.Vector3(positions[c * 3 + 0], positions[c * 3 + 1], positions[c * 3 + 2]);
+
+    const hitPhys = new THREE.Vector3(physPos[0], physPos[1], physPos[2]);
+    const [w0, w1, w2] = computeBarycentric(hitPhys, pA, pB, pC);
+
+    let restU = 0, restV = 0;
+    if (uvs && uvs.length >= (Math.max(a, b, c) + 1) * 2) {
+      restU = w0 * uvs[a * 2 + 0] + w1 * uvs[b * 2 + 0] + w2 * uvs[c * 2 + 0];
+      restV = w0 * uvs[a * 2 + 1] + w1 * uvs[b * 2 + 1] + w2 * uvs[c * 2 + 1];
     }
 
-    if (e.shiftKey) {
-      onTogglePin?.(nearestV);
+    if (activeTool === 'pivot') {
+      if (barycentricPin) {
+        onSetBarycentricPin?.(null);
+      } else {
+        onSetBarycentricPin?.({
+          point: {
+            triangleIndex: e.faceIndex,
+            v0: a, v1: b, v2: c,
+            w0, w1, w2,
+            restU, restV,
+          },
+          targetPos: physPos,
+          compliance: 0,
+        });
+      }
       return;
     }
 
-    isDraggingRef.current = true;
-    activeDragVRef.current = nearestV;
-    dragPlaneYRef.current = hitPoint.y;
-    if (orbitControlsRef.current) orbitControlsRef.current.enabled = false;
-    onDragStart?.(nearestV);
-    try {
-      e.target?.setPointerCapture?.(e.pointerId);
-    } catch {}
+    if (activeTool === 'drag') {
+      isDraggingRef.current = true;
+      onDragStateChange?.(true);
+      if (orbitControlsRef.current) orbitControlsRef.current.enabled = false;
+
+      const newDrag: BarycentricAttachment = {
+        point: {
+          triangleIndex: e.faceIndex,
+          v0: a, v1: b, v2: c,
+          w0, w1, w2,
+          restU, restV,
+        },
+        targetPos: physPos,
+        compliance: 0,
+      };
+      activeDragRef.current = newDrag;
+
+      // Camera-facing drag plane through hit point
+      const camDir = new THREE.Vector3();
+      camera.getWorldDirection(camDir);
+      dragPlaneRef.current = new THREE.Plane().setFromNormalAndCoplanarPoint(camDir.clone().negate(), hitWorld);
+
+      onBarycentricDragStart?.(newDrag);
+      try {
+        e.target?.setPointerCapture?.(e.pointerId);
+      } catch {}
+    }
   };
 
   const handlePointerMove = (e: any) => {
-    if (!isDraggingRef.current || activeDragVRef.current === null) return;
+    if (!isDraggingRef.current || !activeDragRef.current || !dragPlaneRef.current) return;
     e.stopPropagation();
 
     const ray = e.ray;
     if (!ray) return;
-    const targetY = dragPlaneYRef.current;
-    if (Math.abs(ray.direction.y) < 1e-4) return;
-    const t = (targetY - ray.origin.y) / ray.direction.y;
-    if (t < 0) return;
+    const targetWorld = new THREE.Vector3();
+    if (!ray.intersectPlane(dragPlaneRef.current, targetWorld)) return;
 
-    const hitX = ray.origin.x + ray.direction.x * t;
-    const hitZ = ray.origin.z + ray.direction.z * t;
+    let newPhysX = targetWorld.x + 0.58;
+    let newPhysY = -(targetWorld.z + 0.50);
+    let newPhysZ = Math.max(paperThickness * 0.5, targetWorld.y);
 
-    const newPhysX = hitX + 0.58;
-    const newPhysY = -(hitZ + 0.50);
-    const newPhysZ = Math.max(paperThickness * 0.5, targetY);
+    // Reach clamp if pin P is active
+    if (barycentricPin && activeDragRef.current.point.restU !== undefined && barycentricPin.point.restU !== undefined) {
+      const reach = Math.hypot(
+        activeDragRef.current.point.restU - barycentricPin.point.restU,
+        activeDragRef.current.point.restV! - barycentricPin.point.restV!
+      );
+      const pTarget = barycentricPin.targetPos;
+      const dx = newPhysX - pTarget[0];
+      const dy = newPhysY - pTarget[1];
+      const dz = newPhysZ - pTarget[2];
+      const d = Math.hypot(dx, dy, dz);
+      if (d > reach && d > 1e-6) {
+        const scale = reach / d;
+        newPhysX = pTarget[0] + dx * scale;
+        newPhysY = pTarget[1] + dy * scale;
+        newPhysZ = Math.max(paperThickness * 0.5, pTarget[2] + dz * scale);
+      }
+    }
 
-    onDragMove?.(activeDragVRef.current, [newPhysX, newPhysY, newPhysZ]);
+    // Coalesce updates to 1 per animation frame
+    latestTargetRef.current = [newPhysX, newPhysY, newPhysZ];
+    if (!rafIdRef.current) {
+      rafIdRef.current = requestAnimationFrame(() => {
+        rafIdRef.current = null;
+        if (latestTargetRef.current) {
+          onBarycentricDragMove?.(latestTargetRef.current);
+        }
+      });
+    }
   };
 
   const handlePointerUp = (e: any) => {
     if (isDraggingRef.current) {
       e.stopPropagation();
       isDraggingRef.current = false;
-      activeDragVRef.current = null;
+      activeDragRef.current = null;
+      dragPlaneRef.current = null;
+      onDragStateChange?.(false);
       if (orbitControlsRef.current) orbitControlsRef.current.enabled = true;
-      onDragEnd?.();
+      if (rafIdRef.current) {
+        cancelAnimationFrame(rafIdRef.current);
+        rafIdRef.current = null;
+      }
+      onBarycentricDragEnd?.();
       try {
         e.target?.releasePointerCapture?.(e.pointerId);
       } catch {}
@@ -321,6 +454,7 @@ const PaperMesh: React.FC<{
 export interface OrigamiModernCanvasProps {
   indices: Uint32Array | null;
   positions: Float32Array | null;
+  uvs?: Float32Array | null;
   creaseEdges: CreaseEdgeInfo[];
   showCreases?: boolean;
   frontColor?: string;
@@ -328,8 +462,16 @@ export interface OrigamiModernCanvasProps {
   className?: string;
   showTable?: boolean;
   paperThickness?: number;
+  activeTool?: 'pivot' | 'drag';
+  barycentricPin?: BarycentricAttachment | null;
+  barycentricDrag?: BarycentricAttachment | null;
+  reachRadius?: number | null;
   pinnedVertices?: number[];
   draggedVertex?: number | null;
+  onSetBarycentricPin?: (pin: BarycentricAttachment | null) => void;
+  onBarycentricDragStart?: (drag: BarycentricAttachment) => void;
+  onBarycentricDragMove?: (targetPos: [number, number, number]) => void;
+  onBarycentricDragEnd?: () => void;
   onTogglePin?: (vertexIndex: number) => void;
   onDragStart?: (vertexIndex: number) => void;
   onDragMove?: (vertexIndex: number, targetPos: [number, number, number]) => void;
@@ -365,6 +507,7 @@ const TableSurface: React.FC<{ paperThickness?: number }> = ({ paperThickness = 
 export const OrigamiModernCanvas: React.FC<OrigamiModernCanvasProps> = ({
   indices,
   positions,
+  uvs = null,
   creaseEdges,
   showCreases = true,
   frontColor = '#FCFBF7',
@@ -372,17 +515,64 @@ export const OrigamiModernCanvas: React.FC<OrigamiModernCanvasProps> = ({
   className = '',
   showTable = true,
   paperThickness = 0.002,
+  activeTool = 'drag',
+  barycentricPin = null,
+  barycentricDrag = null,
+  reachRadius = null,
   pinnedVertices = [],
   draggedVertex = null,
+  onSetBarycentricPin,
+  onBarycentricDragStart,
+  onBarycentricDragMove,
+  onBarycentricDragEnd,
   onTogglePin,
   onDragStart,
   onDragMove,
   onDragEnd,
 }) => {
   const orbitRef = useRef<any>(null);
+  const [isDragging, setIsDragging] = useState(false);
+
+  // Compute 3D world position for barycentric pin marker
+  const pinWorldPos = useMemo<[number, number, number] | null>(() => {
+    if (!barycentricPin || !positions) return null;
+    const pt = barycentricPin.point;
+    const p0 = pt.v0 * 3, p1 = pt.v1 * 3, p2 = pt.v2 * 3;
+    const curX = pt.w0 * positions[p0 + 0] + pt.w1 * positions[p1 + 0] + pt.w2 * positions[p2 + 0];
+    const curY = pt.w0 * positions[p0 + 1] + pt.w1 * positions[p1 + 1] + pt.w2 * positions[p2 + 1];
+    const curZ = pt.w0 * positions[p0 + 2] + pt.w1 * positions[p1 + 2] + pt.w2 * positions[p2 + 2];
+    return [curX - 0.58, curZ, -curY - 0.50];
+  }, [barycentricPin, positions]);
+
+  // Compute 3D world position for barycentric drag marker
+  const dragWorldPos = useMemo<[number, number, number] | null>(() => {
+    if (!barycentricDrag) return null;
+    return [
+      barycentricDrag.targetPos[0] - 0.58,
+      barycentricDrag.targetPos[2],
+      -barycentricDrag.targetPos[1] - 0.50,
+    ];
+  }, [barycentricDrag]);
+
+  // Reach circle center on the table
+  const reachCenter = useMemo<[number, number, number] | null>(() => {
+    if (!barycentricPin) return null;
+    return [
+      barycentricPin.targetPos[0] - 0.58,
+      0.0005,
+      -barycentricPin.targetPos[1] - 0.50,
+    ];
+  }, [barycentricPin]);
+
+  const cursorClass =
+    activeTool === 'pivot'
+      ? 'cursor-crosshair'
+      : isDragging
+      ? 'cursor-grabbing'
+      : 'cursor-grab';
 
   return (
-    <div className={`relative w-full h-full min-h-[300px] bg-gradient-to-b from-gray-100 to-gray-200 rounded-lg overflow-hidden border border-gray-300 ${className}`}>
+    <div className={`relative w-full h-full min-h-[300px] bg-gradient-to-b from-gray-100 to-gray-200 rounded-lg overflow-hidden border border-gray-300 ${cursorClass} ${className}`}>
       <Canvas
         camera={{ position: [0.0, 1.4, 1.2], fov: 45 }}
         gl={{ antialias: true, alpha: true }}
@@ -399,19 +589,35 @@ export const OrigamiModernCanvas: React.FC<OrigamiModernCanvasProps> = ({
             <PaperMesh
               indices={indices}
               positions={positions}
+              uvs={uvs}
               creaseEdges={creaseEdges}
               showCreases={showCreases}
               frontColor={frontColor}
               backColor={backColor}
               paperThickness={paperThickness}
-              onTogglePin={onTogglePin}
-              onDragStart={onDragStart}
-              onDragMove={onDragMove}
-              onDragEnd={onDragEnd}
+              activeTool={activeTool}
+              barycentricPin={barycentricPin}
+              barycentricDrag={barycentricDrag}
+              onSetBarycentricPin={onSetBarycentricPin}
+              onBarycentricDragStart={onBarycentricDragStart}
+              onBarycentricDragMove={onBarycentricDragMove}
+              onBarycentricDragEnd={onBarycentricDragEnd}
               orbitControlsRef={orbitRef}
+              onDragStateChange={setIsDragging}
             />
 
-            {/* Pinned Vertices Markers */}
+            {/* Pinned Attachment P Marker */}
+            {pinWorldPos && <PinMarker position={pinWorldPos} />}
+
+            {/* Drag Handle Q Marker */}
+            {dragWorldPos && <DragHandleMarker position={dragWorldPos} />}
+
+            {/* Dashed Reach Circle around P on table */}
+            {reachCenter && reachRadius && reachRadius > 0 && (
+              <ReachCircle center={reachCenter} radius={reachRadius} />
+            )}
+
+            {/* Legacy vertex pin markers */}
             {pinnedVertices.map((v) => {
               const px = positions[v * 3 + 0] - 0.58;
               const pz = -positions[v * 3 + 1] - 0.50;
@@ -419,7 +625,7 @@ export const OrigamiModernCanvas: React.FC<OrigamiModernCanvasProps> = ({
               return <PinMarker key={`pin-${v}`} position={[px, py, pz]} />;
             })}
 
-            {/* Dragged Vertex Marker */}
+            {/* Legacy vertex drag marker */}
             {draggedVertex !== null && (
               <DragHandleMarker
                 position={[

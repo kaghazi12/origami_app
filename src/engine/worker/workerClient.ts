@@ -194,6 +194,20 @@ export class OrigamiWorkerClient {
     });
   }
 
+  setBarycentricPins(pins: import('../physics/types').BarycentricAttachment[]): void {
+    this.postMessage({
+      type: 'SET_BARYCENTRIC_PINS',
+      pins,
+    });
+  }
+
+  setBarycentricDrag(drag: import('../physics/types').BarycentricAttachment | null): void {
+    this.postMessage({
+      type: 'SET_BARYCENTRIC_DRAG',
+      drag,
+    });
+  }
+
   /**
    * Recycles the position ArrayBuffer back to the worker for zero-allocation double-buffering
    */
