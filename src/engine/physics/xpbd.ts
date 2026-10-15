@@ -22,6 +22,11 @@ export interface XPBDSolverOptions {
   bendingCompliance?: number;
   contactDamping?: number;
   maxDragSpeed?: number;
+
+  // Phase 8: Plastic hinge settings
+  yieldAngle?: number;
+  springbackFactor?: number;
+  enablePlasticity?: boolean;
 }
 
 /**
@@ -61,6 +66,11 @@ export class XPBDSolver implements FoldSolver {
   muKinetic: number;
   bendingCompliance: number | undefined;
   contactDamping: number;
+
+  // Phase 8: Plastic hinge settings
+  yieldAngle: number;
+  springbackFactor: number;
+  enablePlasticity: boolean;
 
   // Flattened constraint topology arrays for cache-friendly execution
   private numBars: number;
@@ -118,6 +128,11 @@ export class XPBDSolver implements FoldSolver {
     this.bendingCompliance = options.bendingCompliance;
     this.contactDamping = options.contactDamping ?? 0.2;
     this.maxDragSpeed = options.maxDragSpeed ?? 1.5;
+
+    // Phase 8 Plasticity defaults
+    this.yieldAngle = options.yieldAngle ?? (2.86 * Math.PI / 180); // ~0.05 rad
+    this.springbackFactor = options.springbackFactor ?? 0.05;
+    this.enablePlasticity = options.enablePlasticity ?? false;
 
     this.posStar = new Float64Array(numV * 3);
     this.forcesBuffer = new Float64Array(numV * 3);
@@ -687,11 +702,56 @@ export class XPBDSolver implements FoldSolver {
       }
     }
 
+    // Phase 8: Plastic hinge yield & springback update
+    if (this.enablePlasticity) {
+      const maxAngle = Math.PI - (3.0 * Math.PI / 180);
+      for (let hi = 0; hi < this.numHinges; hi++) {
+        if (this.hingeIsFacet[hi] === 0) {
+          const hinge = this.mesh.hinges[hi];
+          const theta = computeDihedralAngle(hinge, this.mesh.positions, false);
+          const rest = this.hingeRestAngle[hi];
+          const diff = theta - rest;
+          if (Math.abs(diff) > this.yieldAngle) {
+            const plasticAmount = (Math.abs(diff) - this.yieldAngle) * (1.0 - this.springbackFactor);
+            let newRest = rest + Math.sign(diff) * plasticAmount;
+            newRest = Math.max(-maxAngle, Math.min(maxAngle, newRest));
+            this.hingeRestAngle[hi] = newRest;
+            hinge.restAngle = newRest;
+          }
+        }
+      }
+    }
+
     return {
       potentialEnergy: 0,
       kineticEnergy: this.getKineticEnergy(),
     };
   }
+
+  /**
+   * Applies "Press Flat" action to all crease hinges:
+   * Sets target and rest angles to +-(180 - deltaDeg) with deltaDeg = 3 degrees.
+   * State clearly: layers WILL interpenetrate until the collision phase.
+   */
+  pressFlat(deltaDeg = 3.0): void {
+    const deltaRad = (deltaDeg * Math.PI) / 180;
+    const flatValley = Math.PI - deltaRad;
+    const flatMountain = -(Math.PI - deltaRad);
+
+    for (let h = 0; h < this.mesh.hinges.length; h++) {
+      const hinge = this.mesh.hinges[h];
+      if (hinge.assignment === 'V' || hinge.assignment === 'M') {
+        const curAngle = computeDihedralAngle(hinge, this.mesh.positions, false);
+        const target = (hinge.assignment === 'M' || curAngle < 0) ? flatMountain : flatValley;
+        hinge.targetAngle = target;
+        hinge.restAngle = target;
+        if (h < this.numHinges) {
+          this.hingeRestAngle[h] = target;
+        }
+      }
+    }
+  }
+
 
   getKineticEnergy(): number {
     let ke = 0;

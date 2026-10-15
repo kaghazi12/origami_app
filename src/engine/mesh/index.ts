@@ -14,7 +14,12 @@ export {
   getRenderBuffers,
   type MeshOptions,
 } from './mesh';
-export { splitMeshAlongPolyline, splitMeshAlongSegment, type SplitOptions } from './split';
+export {
+  splitMeshAlongPolyline,
+  splitMeshAlongSegment,
+  splitMeshAlongPolylines,
+  type SplitOptions,
+} from './split';
 export {
   computeMeshQuality,
   createRegularTriangulation,
@@ -22,3 +27,16 @@ export {
   isCreaseCoveredByMeshEdges,
   type MeshQuality,
 } from './remesh';
+export {
+  computeBisectorPlane,
+  sliceMeshWithPlane,
+  chainSegmentsToPolylines,
+  floodFillFlap,
+  computeMeshQuality3D,
+  cleanupMeshQuality,
+  bakeCreasesToFold,
+  type BisectorPlane,
+  type CutIntersection,
+  type TriangleSlice,
+  type CreasePreviewResult,
+} from './creaseSlice';

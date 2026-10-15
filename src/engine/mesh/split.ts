@@ -182,14 +182,17 @@ function splitMeshSingleSegment(
         const p = splitAB.newVertex;
         newTriangles.push([a, p, c]);
         newTriangles.push([p, b, c]);
+        cutInternalEdges.push([c, p]);
       } else if (splitBC) {
         const p = splitBC.newVertex;
         newTriangles.push([b, p, a]);
         newTriangles.push([p, c, a]);
+        cutInternalEdges.push([a, p]);
       } else if (splitCA) {
         const p = splitCA.newVertex;
         newTriangles.push([c, p, b]);
         newTriangles.push([p, a, b]);
+        cutInternalEdges.push([b, p]);
       }
     } else {
       newTriangles.push([a, b, c]);
@@ -228,6 +231,29 @@ function splitMeshSingleSegment(
   let hingeCounter = 0;
   const cutEdgeSet = new Set<string>();
   cutInternalEdges.forEach(([p, q]) => cutEdgeSet.add(edgeKey(p, q)));
+
+  const distToCutSegment = (p: [number, number]): number => {
+    const dx = cutP1[0] - cutP0[0];
+    const dy = cutP1[1] - cutP0[1];
+    const l2 = dx * dx + dy * dy;
+    if (l2 < 1e-12) return Math.hypot(p[0] - cutP0[0], p[1] - cutP0[1]);
+    let t = ((p[0] - cutP0[0]) * dx + (p[1] - cutP0[1]) * dy) / l2;
+    t = Math.max(0, Math.min(1, t));
+    const px = cutP0[0] + t * dx;
+    const py = cutP0[1] + t * dy;
+    return Math.hypot(p[0] - px, p[1] - py);
+  };
+
+  for (const [k] of newEdgeUsage.entries()) {
+    const [strU, strV] = k.split('_');
+    const u = parseInt(strU, 10);
+    const v = parseInt(strV, 10);
+    const uv0 = uvsList[u];
+    const uv1 = uvsList[v];
+    if (distToCutSegment(uv0) < 1e-4 && distToCutSegment(uv1) < 1e-4) {
+      cutEdgeSet.add(k);
+    }
+  }
 
   for (const [k, usages] of newEdgeUsage.entries()) {
     const [strU, strV] = k.split('_');
@@ -377,4 +403,22 @@ export function splitMeshAlongSegment(
   options: SplitOptions = {}
 ): TriMesh {
   return splitMeshAlongPolyline(mesh, [cutP0, cutP1], options);
+}
+
+/**
+ * Splits a TriMesh along multiple polylines (e.g. multi-layer folds).
+ * Preserves 3D coordinates, velocities, masses, and hinge states.
+ */
+export function splitMeshAlongPolylines(
+  mesh: TriMesh,
+  polylines: [number, number][][],
+  options: SplitOptions = {}
+): TriMesh {
+  let currentMesh = mesh;
+  for (const polyline of polylines) {
+    if (polyline && polyline.length >= 2) {
+      currentMesh = splitMeshAlongPolyline(currentMesh, polyline, options);
+    }
+  }
+  return currentMesh;
 }

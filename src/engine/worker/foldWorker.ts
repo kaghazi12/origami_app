@@ -1,13 +1,35 @@
 import { createMeshFromFold, rampRestAngles } from '../mesh/mesh';
+import { splitMeshAlongPolylines } from '../mesh/split';
+import { bakeCreasesToFold } from '../mesh/creaseSlice';
 import { BarHingeSolver, computeStableTimeStep, seedFromFlat } from '../physics/solver';
 import { XPBDSolver } from '../physics/xpbd';
 import { FoldSolver } from '../physics/types';
-import { TriMesh } from '../types';
+import { TriMesh, FoldFormat } from '../types';
 import { CreaseEdgeInfo, WorkerFrameStats, WorkerRequest, WorkerResponse } from './types';
 
 // State in Worker
 let mesh: TriMesh | null = null;
 let solver: FoldSolver | null = null;
+let currentFold: FoldFormat | null = null;
+let currentMeshOptions: any = null;
+let currentPhysicsParams: any = {};
+const undoStack: { mesh: TriMesh; fold: FoldFormat }[] = [];
+const redoStack: { mesh: TriMesh; fold: FoldFormat }[] = [];
+
+function cloneTriMesh(m: TriMesh): TriMesh {
+  return {
+    numVertices: m.numVertices,
+    numTriangles: m.numTriangles,
+    uvs: new Float64Array(m.uvs),
+    positions: new Float64Array(m.positions),
+    velocities: new Float64Array(m.velocities),
+    masses: new Float64Array(m.masses),
+    indices: new Uint32Array(m.indices),
+    bars: m.bars.map((b) => ({ ...b })),
+    hinges: m.hinges.map((h) => ({ ...h })),
+  };
+}
+
 let isPaused = false;
 let isConverged = false;
 let currentAlpha = 0;
@@ -34,11 +56,9 @@ let isSleeping = false;
 
 function wakeFromSleep() {
   restFrameCount = 0;
-  if (isSleeping) {
-    isSleeping = false;
-    isConverged = false;
-    startLoop();
-  }
+  isSleeping = false;
+  isConverged = false;
+  startLoop();
 }
 
 function stopLoop() {
@@ -113,7 +133,11 @@ function runPhysicsTick() {
   }
 
   // Sleep at rest: when speed < 1e-4 m/s, strain < 0.01, and target alpha reached for N=10 frames
-  const isResting = targetReached && maxSpeed < 1e-4 && maxStrain < 0.01;
+  // (Never sleep while an active drag or pin manipulation is in progress)
+  const anySolver = solver as any;
+  const hasActiveDrag = (anySolver.barycentricDrag !== null && anySolver.barycentricDrag !== undefined) ||
+                        (anySolver.dragTargets && anySolver.dragTargets.size > 0);
+  const isResting = !hasActiveDrag && targetReached && maxSpeed < 1e-4 && maxStrain < 0.01;
   if (isResting) {
     restFrameCount++;
   } else {
@@ -169,10 +193,51 @@ function runPhysicsTick() {
     (self as unknown as Worker).postMessage(response, [posF32.buffer]);
   }
 
-  // Keep looping only if not sleeping and not fully settled
-  if (!isSleeping && (!isConverged || !targetReached)) {
+  // Keep looping only if not sleeping and not fully settled, or if actively dragged
+  if (!isSleeping && (!isConverged || !targetReached || hasActiveDrag)) {
     scheduleNextTick();
   }
+}
+
+function postLoadedResponse(fold?: FoldFormat | null) {
+  if (!mesh) return;
+  // Extract crease edges for 3D visualization
+  const creaseEdges: CreaseEdgeInfo[] = [];
+  for (const h of mesh.hinges) {
+    if (h.assignment === 'M' || h.assignment === 'V' || h.assignment === 'B' || h.assignment === 'F') {
+      creaseEdges.push({
+        v0: h.v0,
+        v1: h.v1,
+        assignment: h.assignment,
+      });
+    }
+  }
+
+  // Bounding box of 2D pattern
+  let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
+  for (let i = 0; i < mesh.numVertices; i++) {
+    const u = mesh.uvs[i * 2 + 0];
+    const v = mesh.uvs[i * 2 + 1];
+    if (u < minX) minX = u;
+    if (u > maxX) maxX = u;
+    if (v < minY) minY = v;
+    if (v > maxY) maxY = v;
+  }
+
+  const uvsF32 = new Float32Array(mesh.uvs.length);
+  for (let i = 0; i < mesh.uvs.length; i++) uvsF32[i] = mesh.uvs[i];
+
+  const loadedResp: WorkerResponse = {
+    type: 'LOADED',
+    numVertices: mesh.numVertices,
+    numTriangles: mesh.numTriangles,
+    indices: new Uint32Array(mesh.indices),
+    uvs: uvsF32,
+    creaseEdges,
+    bounds: { minX, maxX, minY, maxY },
+    bakedFold: fold ?? undefined,
+  };
+  (self as unknown as Worker).postMessage(loadedResp);
 }
 
 self.onmessage = (e: MessageEvent<WorkerRequest>) => {
@@ -202,11 +267,18 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
           muStatic: sOpts.muStatic ?? 0.5,
           muKinetic: sOpts.muKinetic ?? 0.4,
           bendingCompliance: sOpts.bendingCompliance,
+          enablePlasticity: true,
         });
 
         // Seed microscopic out-of-plane perturbation at center
         const center = Math.floor(mesh.numVertices / 2);
         mesh.positions[center * 3 + 2] = 0.01;
+
+        currentFold = req.fold;
+        currentMeshOptions = options;
+        currentPhysicsParams = sOpts;
+        undoStack.length = 0;
+        redoStack.length = 0;
 
         currentAlpha = 0;
         targetAlpha = 0;
@@ -217,43 +289,7 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
         isAwaitingBuffer = false;
         bufferPool.length = 0;
 
-        // Extract crease edges for 3D visualization
-        const creaseEdges: CreaseEdgeInfo[] = [];
-        for (const h of mesh.hinges) {
-          if (h.assignment === 'M' || h.assignment === 'V' || h.assignment === 'B' || h.assignment === 'F') {
-            creaseEdges.push({
-              v0: h.v0,
-              v1: h.v1,
-              assignment: h.assignment,
-            });
-          }
-        }
-
-        // Bounding box of 2D pattern
-        let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-        for (let i = 0; i < mesh.numVertices; i++) {
-          const u = mesh.uvs[i * 2 + 0];
-          const v = mesh.uvs[i * 2 + 1];
-          if (u < minX) minX = u;
-          if (u > maxX) maxX = u;
-          if (v < minY) minY = v;
-          if (v > maxY) maxY = v;
-        }
-
-        const uvsF32 = new Float32Array(mesh.uvs.length);
-        for (let i = 0; i < mesh.uvs.length; i++) uvsF32[i] = mesh.uvs[i];
-
-        const loadedResp: WorkerResponse = {
-          type: 'LOADED',
-          numVertices: mesh.numVertices,
-          numTriangles: mesh.numTriangles,
-          indices: new Uint32Array(mesh.indices),
-          uvs: uvsF32,
-          creaseEdges,
-          bounds: { minX, maxX, minY, maxY },
-        };
-        (self as unknown as Worker).postMessage(loadedResp);
-
+        postLoadedResponse(currentFold);
         startLoop();
         break;
       }
@@ -408,6 +444,129 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
         // If simulation loop was waiting and NOT sleeping, schedule immediately
         if (loopTimer === null && (!isPaused && !isSleeping && mesh && solver)) {
           scheduleNextTick();
+        }
+        break;
+      }
+
+      case 'COMMIT_CREASE': {
+        if (!mesh || !currentFold) return;
+        undoStack.push({
+          mesh: cloneTriMesh(mesh),
+          fold: JSON.parse(JSON.stringify(currentFold)),
+        });
+        redoStack.length = 0;
+
+        const newMesh = splitMeshAlongPolylines(mesh, req.polylinesUV, {
+          assignment: req.assignment ?? 'V',
+          targetAngleDeg: req.foldAngleDeg ?? 177,
+          creaseStiffness: req.creaseStiffness ?? 500,
+        });
+        mesh = newMesh;
+
+        // Update currentFold with newly added creases
+        currentFold = bakeCreasesToFold(
+          currentFold,
+          req.polylinesUV,
+          req.assignment ?? 'V',
+          req.foldAngleDeg ?? 177
+        );
+
+        // Recreate solver with new mesh
+        const sOpts = currentPhysicsParams ?? {};
+        solver = new XPBDSolver(newMesh, {
+          substeps: sOpts.substeps ?? 10,
+          iterations: 2,
+          velocityDamping: 0.995,
+          enableTable: sOpts.enableTable ?? false,
+          tableZ: sOpts.tableZ ?? 0.0,
+          paperThickness: sOpts.paperThickness,
+          enableGravity: sOpts.enableGravity ?? false,
+          gravity: sOpts.gravity ?? 1.0,
+          muStatic: sOpts.muStatic ?? 0.5,
+          muKinetic: sOpts.muKinetic ?? 0.4,
+          bendingCompliance: sOpts.bendingCompliance,
+          enablePlasticity: true,
+        });
+
+        isAwaitingBuffer = false;
+        bufferPool.length = 0;
+        postLoadedResponse(currentFold);
+        wakeFromSleep();
+        break;
+      }
+
+      case 'PRESS_FLAT': {
+        if (solver && solver instanceof XPBDSolver) {
+          solver.pressFlat(req.deltaDeg ?? 3.0);
+          wakeFromSleep();
+        }
+        break;
+      }
+
+      case 'UNDO': {
+        if (undoStack.length > 0 && mesh && currentFold) {
+          redoStack.push({
+            mesh: cloneTriMesh(mesh),
+            fold: JSON.parse(JSON.stringify(currentFold)),
+          });
+          const prev = undoStack.pop()!;
+          mesh = prev.mesh;
+          currentFold = prev.fold;
+
+          const sOpts = currentPhysicsParams ?? {};
+          solver = new XPBDSolver(mesh, {
+            substeps: sOpts.substeps ?? 10,
+            iterations: 2,
+            velocityDamping: 0.995,
+            enableTable: sOpts.enableTable ?? false,
+            tableZ: sOpts.tableZ ?? 0.0,
+            paperThickness: sOpts.paperThickness,
+            enableGravity: sOpts.enableGravity ?? false,
+            gravity: sOpts.gravity ?? 1.0,
+            muStatic: sOpts.muStatic ?? 0.5,
+            muKinetic: sOpts.muKinetic ?? 0.4,
+            bendingCompliance: sOpts.bendingCompliance,
+            enablePlasticity: true,
+          });
+
+          isAwaitingBuffer = false;
+          bufferPool.length = 0;
+          postLoadedResponse(currentFold);
+          wakeFromSleep();
+        }
+        break;
+      }
+
+      case 'REDO': {
+        if (redoStack.length > 0 && mesh && currentFold) {
+          undoStack.push({
+            mesh: cloneTriMesh(mesh),
+            fold: JSON.parse(JSON.stringify(currentFold)),
+          });
+          const next = redoStack.pop()!;
+          mesh = next.mesh;
+          currentFold = next.fold;
+
+          const sOpts = currentPhysicsParams ?? {};
+          solver = new XPBDSolver(mesh, {
+            substeps: sOpts.substeps ?? 10,
+            iterations: 2,
+            velocityDamping: 0.995,
+            enableTable: sOpts.enableTable ?? false,
+            tableZ: sOpts.tableZ ?? 0.0,
+            paperThickness: sOpts.paperThickness,
+            enableGravity: sOpts.enableGravity ?? false,
+            gravity: sOpts.gravity ?? 1.0,
+            muStatic: sOpts.muStatic ?? 0.5,
+            muKinetic: sOpts.muKinetic ?? 0.4,
+            bendingCompliance: sOpts.bendingCompliance,
+            enablePlasticity: true,
+          });
+
+          isAwaitingBuffer = false;
+          bufferPool.length = 0;
+          postLoadedResponse(currentFold);
+          wakeFromSleep();
         }
         break;
       }

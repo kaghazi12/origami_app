@@ -3,7 +3,17 @@ import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls, Center } from '@react-three/drei';
 import * as THREE from 'three';
 import { CreaseEdgeInfo } from '../../engine/worker/types';
+import { computeBisectorPlane, sliceMeshWithPlane, floodFillFlap, BisectorPlane } from '../../engine/mesh/creaseSlice';
+import { TriMesh, EdgeAssignment } from '../../engine/types';
 
+export interface CreasePreviewData {
+  plane: BisectorPlane;
+  segments3D: [ [number, number, number], [number, number, number] ][];
+  polylinesUV: [number, number][][];
+  flapTriangles: Set<number>;
+  assignment: EdgeAssignment;
+  foldAngleDeg: number;
+}
 
 const ThreeProfiler: React.FC = () => {
   const { gl } = useThree();
@@ -163,6 +173,9 @@ const PaperMesh: React.FC<{
   activeTool?: 'pivot' | 'drag';
   barycentricPin?: BarycentricAttachment | null;
   barycentricDrag?: BarycentricAttachment | null;
+  previewCrease?: CreasePreviewData | null;
+  foldOnlyTopLayer?: boolean;
+  onPreviewChange?: (preview: CreasePreviewData | null) => void;
   onSetBarycentricPin?: (pin: BarycentricAttachment | null) => void;
   onBarycentricDragStart?: (drag: BarycentricAttachment) => void;
   onBarycentricDragMove?: (targetPos: [number, number, number]) => void;
@@ -181,6 +194,9 @@ const PaperMesh: React.FC<{
   activeTool = 'drag',
   barycentricPin = null,
   barycentricDrag = null,
+  previewCrease = null,
+  foldOnlyTopLayer = false,
+  onPreviewChange,
   onSetBarycentricPin,
   onBarycentricDragStart,
   onBarycentricDragMove,
@@ -189,6 +205,7 @@ const PaperMesh: React.FC<{
   onDragStateChange,
 }) => {
   const isDraggingRef = useRef(false);
+  const dragStartPosRef = useRef<[number, number, number] | null>(null);
   const activeDragRef = useRef<BarycentricAttachment | null>(null);
   const dragPlaneRef = useRef<THREE.Plane | null>(null);
   const latestTargetRef = useRef<[number, number, number] | null>(null);
@@ -244,6 +261,7 @@ const PaperMesh: React.FC<{
 
     if (activeTool === 'drag') {
       isDraggingRef.current = true;
+      dragStartPosRef.current = physPos;
       onDragStateChange?.(true);
       if (orbitControlsRef.current) orbitControlsRef.current.enabled = false;
 
@@ -310,6 +328,69 @@ const PaperMesh: React.FC<{
         rafIdRef.current = null;
         if (latestTargetRef.current) {
           onBarycentricDragMove?.(latestTargetRef.current);
+
+          // Compute live crease preview if pin P exists
+          if (barycentricPin && dragStartPosRef.current && activeDragRef.current && positions && indices && uvs) {
+            const q0 = dragStartPosRef.current;
+            const qPrime = latestTargetRef.current;
+            const pinPos = barycentricPin.targetPos;
+
+            const plane = computeBisectorPlane(q0, qPrime, pinPos);
+            if (plane) {
+              const meshView: TriMesh = {
+                numVertices: positions.length / 3,
+                numTriangles: indices.length / 3,
+                positions: positions as unknown as Float64Array,
+                uvs: uvs as unknown as Float64Array,
+                masses: new Float64Array(0),
+                velocities: new Float64Array(0),
+                indices,
+                bars: [],
+                hinges: [],
+              };
+
+              let triIndices: number[] | undefined = undefined;
+              if (foldOnlyTopLayer) {
+                const startTri = activeDragRef.current.point.triangleIndex;
+                const topIndices: number[] = [];
+                const zThreshold = positions[indices[startTri * 3 + 0] * 3 + 2] - 0.002;
+                for (let t = 0; t < meshView.numTriangles; t++) {
+                  const v0 = indices[t * 3 + 0];
+                  if (positions[v0 * 3 + 2] >= zThreshold) {
+                    topIndices.push(t);
+                  }
+                }
+                triIndices = topIndices;
+              }
+
+              const sliceRes = sliceMeshWithPlane(meshView, plane, {
+                snapEps: 0.0005,
+                triangleIndices: triIndices,
+              });
+
+              if (sliceRes.segments3D.length > 0 && sliceRes.polylinesUV.length > 0) {
+                const isValley = (qPrime[2] - q0[2]) >= -1e-4;
+                const flap = floodFillFlap(
+                  meshView,
+                  activeDragRef.current.point.triangleIndex,
+                  sliceRes.creaseEdgeKeys
+                );
+
+                onPreviewChange?.({
+                  plane,
+                  segments3D: sliceRes.segments3D,
+                  polylinesUV: sliceRes.polylinesUV,
+                  flapTriangles: flap.flapTriangles,
+                  assignment: isValley ? 'V' : 'M',
+                  foldAngleDeg: 177,
+                });
+              } else {
+                onPreviewChange?.(null);
+              }
+            } else {
+              onPreviewChange?.(null);
+            }
+          }
         }
       });
     }
@@ -408,6 +489,52 @@ const PaperMesh: React.FC<{
     }
   }, [positions, geometry, creaseGeometry, creaseEdges, showCreases]);
 
+  // Live preview crease line geometry
+  const previewGeometry = useMemo(() => {
+    if (!previewCrease || previewCrease.segments3D.length === 0) return null;
+    const points: THREE.Vector3[] = [];
+    for (const seg of previewCrease.segments3D) {
+      points.push(new THREE.Vector3(seg[0][0], seg[0][1], seg[0][2] + 0.002));
+      points.push(new THREE.Vector3(seg[1][0], seg[1][1], seg[1][2] + 0.002));
+    }
+    const geo = new THREE.BufferGeometry().setFromPoints(points);
+    const line = new THREE.LineSegments(geo);
+    line.computeLineDistances();
+    return geo;
+  }, [previewCrease?.segments3D]);
+
+  // Live preview shaded flap overlay geometry
+  const flapGeometry = useMemo(() => {
+    if (!previewCrease || previewCrease.flapTriangles.size === 0 || !positions) return null;
+    const geo = new THREE.BufferGeometry();
+    const posAttr = new THREE.BufferAttribute(new Float32Array(positions), 3);
+    geo.setAttribute('position', posAttr);
+
+    const flapIndices: number[] = [];
+    for (const tri of previewCrease.flapTriangles) {
+      flapIndices.push(
+        indices[tri * 3 + 0],
+        indices[tri * 3 + 1],
+        indices[tri * 3 + 2]
+      );
+    }
+    geo.setIndex(new THREE.BufferAttribute(new Uint32Array(flapIndices), 1));
+    geo.computeVertexNormals();
+    return geo;
+  }, [previewCrease?.flapTriangles, positions, indices]);
+
+  // Keep flapGeometry positions in sync
+  useEffect(() => {
+    if (flapGeometry && positions) {
+      const flapPosAttr = flapGeometry.getAttribute('position') as THREE.BufferAttribute;
+      if (flapPosAttr && flapPosAttr.array.length === positions.length) {
+        (flapPosAttr.array as Float32Array).set(positions);
+        flapPosAttr.needsUpdate = true;
+        flapGeometry.computeVertexNormals();
+      }
+    }
+  }, [positions, flapGeometry]);
+
   return (
     <group position={[-0.58, 0, -0.50]} rotation={[-Math.PI / 2, 0, 0]}>
       {/* Front Face: crisp origami paper color */}
@@ -441,10 +568,39 @@ const PaperMesh: React.FC<{
         />
       </mesh>
 
+      {/* Moving Flap Shading Overlay */}
+      {flapGeometry && (
+        <mesh geometry={flapGeometry}>
+          <meshStandardMaterial
+            color="#38bdf8"
+            transparent
+            opacity={0.35}
+            roughness={0.5}
+            side={THREE.DoubleSide}
+            depthWrite={false}
+            polygonOffset
+            polygonOffsetFactor={-1}
+            polygonOffsetUnits={-1}
+          />
+        </mesh>
+      )}
+
       {/* 3D Crease Lines */}
       {showCreases && creaseGeometry && (
         <lineSegments geometry={creaseGeometry}>
           <lineBasicMaterial vertexColors linewidth={2} />
+        </lineSegments>
+      )}
+
+      {/* Live Dashed Crease Preview Line */}
+      {previewGeometry && previewCrease && (
+        <lineSegments geometry={previewGeometry}>
+          <lineDashedMaterial
+            color={previewCrease.assignment === 'M' ? '#ef4444' : '#3b82f6'}
+            dashSize={0.02}
+            gapSize={0.015}
+            linewidth={3}
+          />
         </lineSegments>
       )}
     </group>
@@ -466,6 +622,9 @@ export interface OrigamiModernCanvasProps {
   barycentricPin?: BarycentricAttachment | null;
   barycentricDrag?: BarycentricAttachment | null;
   reachRadius?: number | null;
+  previewCrease?: CreasePreviewData | null;
+  foldOnlyTopLayer?: boolean;
+  onPreviewChange?: (preview: CreasePreviewData | null) => void;
   pinnedVertices?: number[];
   draggedVertex?: number | null;
   onSetBarycentricPin?: (pin: BarycentricAttachment | null) => void;
@@ -519,6 +678,9 @@ export const OrigamiModernCanvas: React.FC<OrigamiModernCanvasProps> = ({
   barycentricPin = null,
   barycentricDrag = null,
   reachRadius = null,
+  previewCrease = null,
+  foldOnlyTopLayer = false,
+  onPreviewChange,
   pinnedVertices = [],
   draggedVertex = null,
   onSetBarycentricPin,
@@ -598,6 +760,9 @@ export const OrigamiModernCanvas: React.FC<OrigamiModernCanvasProps> = ({
               activeTool={activeTool}
               barycentricPin={barycentricPin}
               barycentricDrag={barycentricDrag}
+              previewCrease={previewCrease}
+              foldOnlyTopLayer={foldOnlyTopLayer}
+              onPreviewChange={onPreviewChange}
               onSetBarycentricPin={onSetBarycentricPin}
               onBarycentricDragStart={onBarycentricDragStart}
               onBarycentricDragMove={onBarycentricDragMove}

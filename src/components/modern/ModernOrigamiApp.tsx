@@ -13,8 +13,9 @@ import {
 } from 'lucide-react';
 import { OrigamiWorkerClient, LoadedMeshInfo, FrameEvent } from '../../engine/worker/workerClient';
 import { CreasePattern2D } from './CreasePattern2D';
-import { OrigamiModernCanvas } from './OrigamiModernCanvas';
-import { FoldFormat } from '../../engine/types';
+import { OrigamiModernCanvas, CreasePreviewData } from './OrigamiModernCanvas';
+import { FoldFormat, TriMesh } from '../../engine/types';
+import { computeBisectorPlane, sliceMeshWithPlane, floodFillFlap } from '../../engine/mesh/creaseSlice';
 import {
   createMiuraOriPattern,
   createWaterbombBasePattern,
@@ -40,6 +41,11 @@ export const ModernOrigamiApp: React.FC = () => {
   const [loadedInfo, setLoadedInfo] = useState<LoadedMeshInfo | null>(null);
   const [positions, setPositions] = useState<Float32Array | null>(null);
   const [stats, setStats] = useState<FrameEvent['stats'] | null>(null);
+
+  // Phase 8: Plastic Emergent Crease Preview and Layer Selection
+  const [previewCrease, setPreviewCrease] = useState<CreasePreviewData | null>(null);
+  const previewCreaseRef = useRef<CreasePreviewData | null>(null);
+  const [foldOnlyTopLayer, setFoldOnlyTopLayer] = useState<boolean>(false);
 
   // Interaction controls
   const [alpha, setAlpha] = useState<number>(0);
@@ -85,6 +91,9 @@ export const ModernOrigamiApp: React.FC = () => {
     flag: false,
   });
 
+  const loadedInfoRef = useRef<LoadedMeshInfo | null>(null);
+  const positionsRef = useRef<Float32Array | null>(null);
+
   // Worker client ref
   const clientRef = useRef<OrigamiWorkerClient | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
@@ -95,8 +104,12 @@ export const ModernOrigamiApp: React.FC = () => {
     clientRef.current = client;
 
     client.onLoaded((info) => {
+      loadedInfoRef.current = info;
       setLoadedInfo(info);
       setPositions(null);
+      if (info.bakedFold) {
+        setCurrentFold(info.bakedFold);
+      }
     });
 
     client.onFrame((frameEvent) => {
@@ -148,6 +161,7 @@ export const ModernOrigamiApp: React.FC = () => {
       }
 
       // 1. Immediately update positions for fluid 3D canvas rendering
+      positionsRef.current = clientBuf;
       setPositions(clientBuf);
 
       // 2. Coalesce UI telemetry state updates to <= 10 Hz (every 100 ms) via ref gating
@@ -300,24 +314,34 @@ export const ModernOrigamiApp: React.FC = () => {
     clientRef.current?.setDrag(vIndex, targetPos);
   }, []);
 
+  const barycentricPinRef = useRef<BarycentricAttachment | null>(null);
+  const barycentricDragRef = useRef<BarycentricAttachment | null>(null);
+
   const handleSetBarycentricPin = useCallback((pin: BarycentricAttachment | null) => {
+    barycentricPinRef.current = pin;
     setBarycentricPin(pin);
     if (!pin) setReachRadius(null);
     clientRef.current?.setBarycentricPins(pin ? [pin] : []);
   }, []);
 
   const handleClearBarycentricPin = useCallback(() => {
+    barycentricPinRef.current = null;
     setBarycentricPin(null);
     setReachRadius(null);
     clientRef.current?.setBarycentricPins([]);
   }, []);
 
+  const dragStartPosRef = useRef<[number, number, number] | null>(null);
+
   const handleBarycentricDragStart = useCallback((drag: BarycentricAttachment) => {
+    barycentricDragRef.current = drag;
     setBarycentricDrag(drag);
-    if (barycentricPin && drag.point.restU !== undefined && barycentricPin.point.restU !== undefined) {
+    dragStartPosRef.current = [...drag.targetPos];
+    const pin = barycentricPinRef.current || barycentricPin;
+    if (pin && drag.point.restU !== undefined && pin.point.restU !== undefined) {
       const reach = Math.hypot(
-        drag.point.restU - barycentricPin.point.restU,
-        drag.point.restV! - barycentricPin.point.restV!
+        drag.point.restU - pin.point.restU,
+        drag.point.restV! - pin.point.restV!
       );
       setReachRadius(reach);
     }
@@ -325,28 +349,145 @@ export const ModernOrigamiApp: React.FC = () => {
   }, [barycentricPin]);
 
   const handleBarycentricDragMove = useCallback((targetPos: [number, number, number]) => {
+    const curDrag = barycentricDragRef.current;
+    if (curDrag) {
+      curDrag.targetPos = targetPos;
+      clientRef.current?.setBarycentricDrag(curDrag);
+    }
+
+    const active = curDrag || barycentricDrag;
+
+    // Compute live crease preview synchronously
+    const pin = barycentricPinRef.current || barycentricPin;
+    const info = loadedInfoRef.current || loadedInfo;
+    const pos = positionsRef.current || positions;
+    if (pin && active && dragStartPosRef.current && info?.indices && info?.uvs && pos) {
+      const q0 = dragStartPosRef.current;
+      const qPrime = targetPos;
+      const pinPos = pin.targetPos;
+
+      const plane = computeBisectorPlane(q0, qPrime, pinPos);
+      if (plane) {
+        const meshView: TriMesh = {
+          numVertices: pos.length / 3,
+          numTriangles: info.indices.length / 3,
+          positions: pos as unknown as Float64Array,
+          uvs: info.uvs as unknown as Float64Array,
+          masses: new Float64Array(0),
+          velocities: new Float64Array(0),
+          indices: info.indices,
+          bars: [],
+          hinges: [],
+        };
+
+        let triIndices: number[] | undefined = undefined;
+        if (foldOnlyTopLayer) {
+          const startTri = active.point.triangleIndex;
+          const topIndices: number[] = [];
+          const zThreshold = pos[info.indices[startTri * 3 + 0] * 3 + 2] - 0.002;
+          for (let t = 0; t < meshView.numTriangles; t++) {
+            const v0 = info.indices[t * 3 + 0];
+            if (pos[v0 * 3 + 2] >= zThreshold) {
+              topIndices.push(t);
+            }
+          }
+          triIndices = topIndices;
+        }
+
+        const sliceRes = sliceMeshWithPlane(meshView, plane, {
+          snapEps: 0.0005,
+          triangleIndices: triIndices,
+        });
+
+        if (sliceRes.segments3D.length > 0 && sliceRes.polylinesUV.length > 0) {
+          const isValley = (qPrime[2] - q0[2]) >= -1e-4;
+          const flap = floodFillFlap(
+            meshView,
+            active.point.triangleIndex,
+            sliceRes.creaseEdgeKeys
+          );
+
+          const previewData: CreasePreviewData = {
+            plane,
+            segments3D: sliceRes.segments3D,
+            polylinesUV: sliceRes.polylinesUV,
+            flapTriangles: flap.flapTriangles,
+            assignment: (isValley ? 'V' : 'M') as import('../../engine/types').EdgeAssignment,
+            foldAngleDeg: 177,
+          };
+          previewCreaseRef.current = previewData;
+          setPreviewCrease(previewData);
+        } else {
+          previewCreaseRef.current = null;
+          setPreviewCrease(null);
+        }
+      } else {
+        previewCreaseRef.current = null;
+        setPreviewCrease(null);
+      }
+    }
+
     setBarycentricDrag((prev) => {
-      if (!prev) return null;
-      const updated = { ...prev, targetPos };
-      clientRef.current?.setBarycentricDrag(updated);
-      return updated;
+      const cur = curDrag || prev;
+      if (!cur) return null;
+      return { ...cur, targetPos };
     });
-  }, []);
+  }, [barycentricPin, barycentricDrag, foldOnlyTopLayer, loadedInfo, positions]);
 
   const handleBarycentricDragEnd = useCallback(() => {
+    barycentricDragRef.current = null;
+    dragStartPosRef.current = null;
     setBarycentricDrag(null);
     clientRef.current?.setBarycentricDrag(null);
+  }, []);
+
+  const handleCommitCrease = useCallback(() => {
+    const prev = previewCreaseRef.current || previewCrease;
+    if (!prev || prev.polylinesUV.length === 0) return;
+    clientRef.current?.commitCrease(
+      prev.polylinesUV,
+      prev.assignment,
+      prev.foldAngleDeg,
+      500
+    );
+    previewCreaseRef.current = null;
+    setPreviewCrease(null);
+  }, [previewCrease]);
+
+  const handlePressFlat = useCallback(() => {
+    clientRef.current?.pressFlat(3.0);
+  }, []);
+
+  const handleUndo = useCallback(() => {
+    clientRef.current?.undo();
+    setPreviewCrease(null);
+  }, []);
+
+  const handleRedo = useCallback(() => {
+    clientRef.current?.redo();
+    setPreviewCrease(null);
   }, []);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
         handleClearBarycentricPin();
+        setPreviewCrease(null);
+      } else if (e.key === 'c' || e.key === 'C') {
+        handleCommitCrease();
+      } else if (e.key === 'f' || e.key === 'F') {
+        handlePressFlat();
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === 'z' || e.key === 'Z')) {
+        e.preventDefault();
+        handleUndo();
+      } else if ((e.ctrlKey || e.metaKey) && (e.key === 'y' || e.key === 'Y')) {
+        e.preventDefault();
+        handleRedo();
       }
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleClearBarycentricPin]);
+  }, [handleClearBarycentricPin, handleCommitCrease, handlePressFlat, handleUndo, handleRedo]);
 
   useEffect(() => {
     (window as any).__ORIGAMI_TEST_API__ = {
@@ -354,12 +495,20 @@ export const ModernOrigamiApp: React.FC = () => {
       dragStart: handleBarycentricDragStart,
       dragMove: handleBarycentricDragMove,
       dragEnd: handleBarycentricDragEnd,
+      commitCrease: handleCommitCrease,
+      pressFlat: handlePressFlat,
+      undo: handleUndo,
+      redo: handleRedo,
+      getPreview: () => previewCreaseRef.current || previewCrease,
+      getFold: () => currentFold,
+      foldOnlyTopLayer,
+      setFoldOnlyTopLayer,
       getClient: () => clientRef.current,
       getStats: () => stats,
       getLatency: () => latencyMs,
       getPositions: () => positions,
     };
-  }, [handleSetBarycentricPin, handleBarycentricDragStart, handleBarycentricDragMove, handleBarycentricDragEnd, stats, latencyMs, positions]);
+  }, [handleSetBarycentricPin, handleBarycentricDragStart, handleBarycentricDragMove, handleBarycentricDragEnd, handleCommitCrease, handlePressFlat, handleUndo, handleRedo, previewCrease, currentFold, foldOnlyTopLayer, stats, latencyMs, positions]);
 
   // Play / Pause animation loop
   useEffect(() => {
@@ -562,12 +711,64 @@ export const ModernOrigamiApp: React.FC = () => {
             </button>
           )}
 
+          {/* Emergent Crease & Plastic Actions */}
+          <div className="flex items-center space-x-1 pl-2 border-l border-gray-200">
+            <button
+              onClick={handleCommitCrease}
+              disabled={!previewCrease}
+              className={`flex items-center space-x-1 px-2.5 py-1 text-xs font-semibold rounded border transition-colors ${
+                previewCrease
+                  ? 'bg-emerald-600 text-white border-emerald-700 shadow-sm'
+                  : 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'
+              }`}
+              title="Commit emergent crease line into mesh (C)"
+            >
+              <span>Commit Crease (C)</span>
+            </button>
+
+            <button
+              onClick={handlePressFlat}
+              className="px-2 py-1 text-xs font-medium bg-blue-50 text-blue-700 border border-blue-200 hover:bg-blue-100 rounded transition-colors"
+              title="Press flat to plastic yield limit ±(180°-δ) (F)"
+            >
+              <span>Press Flat (F)</span>
+            </button>
+
+            <button
+              onClick={handleUndo}
+              className="px-2 py-1 text-xs font-medium bg-gray-100 text-gray-700 hover:bg-gray-200 rounded border border-gray-300 transition-colors"
+              title="Undo crease split (Ctrl+Z)"
+            >
+              <span>Undo</span>
+            </button>
+
+            <button
+              onClick={handleRedo}
+              className="px-2 py-1 text-xs font-medium bg-gray-100 text-gray-700 hover:bg-gray-200 rounded border border-gray-300 transition-colors"
+              title="Redo crease split (Ctrl+Y)"
+            >
+              <span>Redo</span>
+            </button>
+
+            <button
+              onClick={() => setFoldOnlyTopLayer((prev) => !prev)}
+              className={`px-2 py-1 text-xs font-medium rounded border transition-colors ${
+                foldOnlyTopLayer
+                  ? 'bg-purple-100 text-purple-800 border-purple-300 font-semibold'
+                  : 'bg-gray-50 text-gray-600 border-gray-200 hover:bg-gray-100'
+              }`}
+              title="Toggle All Layers vs Top Layer Only"
+            >
+              <span>{foldOnlyTopLayer ? 'Top Layer' : 'All Layers'}</span>
+            </button>
+          </div>
+
           <div className="hidden xl:flex items-center space-x-1 text-[11px] text-gray-500 bg-gray-50 px-2 py-1 rounded border border-gray-200">
             <span className="font-semibold text-indigo-600">Tool:</span>
             <span>
               {activeTool === 'pivot'
                 ? '📍 Click paper to set Pin P (Esc to clear)'
-                : '✋ Left-drag paper to fold/lift Q (Right-drag to orbit)'}
+                : '✋ Drag Q to preview crease (C to commit, F to press flat)'}
             </span>
           </div>
         </div>
@@ -594,6 +795,9 @@ export const ModernOrigamiApp: React.FC = () => {
             barycentricPin={barycentricPin}
             barycentricDrag={barycentricDrag}
             reachRadius={reachRadius}
+            previewCrease={previewCrease}
+            foldOnlyTopLayer={foldOnlyTopLayer}
+            onPreviewChange={setPreviewCrease}
             onSetBarycentricPin={handleSetBarycentricPin}
             onBarycentricDragStart={handleBarycentricDragStart}
             onBarycentricDragMove={handleBarycentricDragMove}
@@ -863,8 +1067,8 @@ export const ModernOrigamiApp: React.FC = () => {
           </div>
         </div>
 
-        <div className="text-gray-400 text-[11px]">
-          Table XPBD Contact | Coulomb Friction
+        <div className="text-gray-400 text-[11px] italic">
+          Note: Paper layers will interpenetrate until collision phase is added.
         </div>
       </div>
     </div>

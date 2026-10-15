@@ -77,6 +77,23 @@ export type WorkerRequest =
       speed: number;
     }
   | {
+      type: 'COMMIT_CREASE';
+      polylinesUV: [number, number][][];
+      assignment?: import('../types').EdgeAssignment;
+      foldAngleDeg?: number;
+      creaseStiffness?: number;
+    }
+  | {
+      type: 'PRESS_FLAT';
+      deltaDeg?: number;
+    }
+  | {
+      type: 'UNDO';
+    }
+  | {
+      type: 'REDO';
+    }
+  | {
       type: 'RETURN_BUFFER';
       buffer: ArrayBufferLike;
     };
@@ -116,6 +133,7 @@ export type WorkerResponse =
       uvs: Float32Array;
       creaseEdges: CreaseEdgeInfo[];
       bounds: { minX: number; maxX: number; minY: number; maxY: number };
+      bakedFold?: FoldFormat;
     }
   | {
       type: 'FRAME';

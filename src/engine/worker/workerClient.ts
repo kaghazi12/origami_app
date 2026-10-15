@@ -8,6 +8,7 @@ export interface LoadedMeshInfo {
   uvs: Float32Array;
   creaseEdges: CreaseEdgeInfo[];
   bounds: { minX: number; maxX: number; minY: number; maxY: number };
+  bakedFold?: FoldFormat;
 }
 
 export interface FrameEvent {
@@ -70,6 +71,7 @@ export class OrigamiWorkerClient {
           uvs: data.uvs,
           creaseEdges: data.creaseEdges,
           bounds: data.bounds,
+          bakedFold: data.bakedFold,
         });
         break;
       }
@@ -212,6 +214,40 @@ export class OrigamiWorkerClient {
     this.postMessage({
       type: 'SET_MAX_DRAG_SPEED',
       speed,
+    });
+  }
+
+  commitCrease(
+    polylinesUV: [number, number][][],
+    assignment: import('../types').EdgeAssignment = 'V',
+    foldAngleDeg: number = 177,
+    creaseStiffness: number = 500
+  ): void {
+    this.postMessage({
+      type: 'COMMIT_CREASE',
+      polylinesUV,
+      assignment,
+      foldAngleDeg,
+      creaseStiffness,
+    });
+  }
+
+  pressFlat(deltaDeg = 3.0): void {
+    this.postMessage({
+      type: 'PRESS_FLAT',
+      deltaDeg,
+    });
+  }
+
+  undo(): void {
+    this.postMessage({
+      type: 'UNDO',
+    });
+  }
+
+  redo(): void {
+    this.postMessage({
+      type: 'REDO',
     });
   }
 
