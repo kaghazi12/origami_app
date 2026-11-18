@@ -10,3 +10,12 @@ export {
 } from './solver';
 export { XPBDSolver, type XPBDSolverOptions } from './xpbd';
 export { assertFinite, isMeshFinite } from './validation';
+export {
+  checkTriangleTriangleIntersection,
+  SpatialHash,
+  countMeshIntersections,
+  closestPointTriangle,
+  closestPointsSegments,
+  solveContactsXPBD,
+  type ContactData,
+} from './collision';

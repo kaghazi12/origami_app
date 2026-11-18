@@ -10,6 +10,8 @@ import {
   Sliders,
   CheckCircle2,
   AlertCircle,
+  Maximize2,
+  Minimize2,
 } from 'lucide-react';
 import { OrigamiWorkerClient, LoadedMeshInfo, FrameEvent } from '../../engine/worker/workerClient';
 import { CreasePattern2D } from './CreasePattern2D';
@@ -32,7 +34,49 @@ const SAMPLES = [
 
 import { BarycentricAttachment } from '../../engine/physics/types';
 
+function getOrigamiProfiling() {
+  if (typeof window === 'undefined') return null;
+  const p = ((window as any).__ORIGAMI_PROFILING__ = (window as any).__ORIGAMI_PROFILING__ || {});
+  p.workerTickDurationMs = p.workerTickDurationMs || [];
+  p.timeBetweenWorkerPostsMs = p.timeBetweenWorkerPostsMs || [];
+  p.postMessageToOnFrameMs = p.postMessageToOnFrameMs || [];
+  p.mainThreadBufferCopyMs = p.mainThreadBufferCopyMs || [];
+  p.computeVertexNormalsMs = p.computeVertexNormalsMs || [];
+  p.threeRenderMs = p.threeRenderMs || [];
+  p.gpuTimerQueryMs = p.gpuTimerQueryMs || [];
+  p.previewSlicingMs = p.previewSlicingMs || [];
+  p.geometryUpdateMs = p.geometryUpdateMs || [];
+  p.longTasks = p.longTasks || [];
+  p.reactRenderCount = p.reactRenderCount || 0;
+  p.creasePatternRenderCount = p.creasePatternRenderCount || 0;
+  p.rendererInfo = p.rendererInfo || { calls: 0, triangles: 0, points: 0, lines: 0, frame: 0 };
+  return p;
+}
+
 export const ModernOrigamiApp: React.FC = () => {
+  const prof = getOrigamiProfiling();
+  if (prof) {
+    prof.reactRenderCount = (prof.reactRenderCount || 0) + 1;
+  }
+
+  // Monitor main-thread longtasks (> 50 ms) via PerformanceObserver
+  useEffect(() => {
+    if (typeof window !== 'undefined' && 'PerformanceObserver' in window) {
+      try {
+        const observer = new PerformanceObserver((list) => {
+          const p = getOrigamiProfiling();
+          if (!p) return;
+          for (const entry of list.getEntries()) {
+            p.longTasks.push(entry.duration);
+            if (p.longTasks.length > 500) p.longTasks.shift();
+          }
+        });
+        observer.observe({ entryTypes: ['longtask'] });
+        return () => observer.disconnect();
+      } catch {}
+    }
+  }, []);
+
   const [selectedSampleId, setSelectedSampleId] = useState<string>('flat');
   const [currentFold, setCurrentFold] = useState<FoldFormat>(() => createSquareSheet(1, 1));
   const [meshDensity, setMeshDensity] = useState<'121' | '441'>('121');
@@ -43,7 +87,8 @@ export const ModernOrigamiApp: React.FC = () => {
   const [stats, setStats] = useState<FrameEvent['stats'] | null>(null);
 
   // Phase 8: Plastic Emergent Crease Preview and Layer Selection
-  const [previewCrease, setPreviewCrease] = useState<CreasePreviewData | null>(null);
+  const [canCommit, setCanCommit] = useState<boolean>(false);
+  const canCommitRef = useRef<boolean>(false);
   const previewCreaseRef = useRef<CreasePreviewData | null>(null);
   const [foldOnlyTopLayer, setFoldOnlyTopLayer] = useState<boolean>(false);
 
@@ -98,6 +143,42 @@ export const ModernOrigamiApp: React.FC = () => {
   const clientRef = useRef<OrigamiWorkerClient | null>(null);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
+  // 3D Fullscreen state & DOM ref
+  const viewport3dRef = useRef<HTMLDivElement>(null);
+  const [is3dFullscreen, setIs3dFullscreen] = useState<boolean>(false);
+
+  const toggle3dFullscreen = useCallback(async () => {
+    if (!is3dFullscreen) {
+      if (viewport3dRef.current && document.fullscreenEnabled && !document.fullscreenElement) {
+        try {
+          await viewport3dRef.current.requestFullscreen();
+        } catch {
+          // Native fullscreen blocked or denied, fallback to CSS fullscreen
+        }
+      }
+      setIs3dFullscreen(true);
+    } else {
+      if (document.fullscreenElement) {
+        try {
+          await document.exitFullscreen();
+        } catch {}
+      }
+      setIs3dFullscreen(false);
+    }
+  }, [is3dFullscreen]);
+
+  // Sync fullscreen state if user exits via browser native key (e.g., Esc)
+  useEffect(() => {
+    const handleFullscreenChange = () => {
+      const isNative = !!document.fullscreenElement;
+      if (!isNative && is3dFullscreen) {
+        setIs3dFullscreen(false);
+      }
+    };
+    document.addEventListener('fullscreenchange', handleFullscreenChange);
+    return () => document.removeEventListener('fullscreenchange', handleFullscreenChange);
+  }, [is3dFullscreen]);
+
   // Initialize Worker Client
   useEffect(() => {
     const client = new OrigamiWorkerClient();
@@ -114,20 +195,14 @@ export const ModernOrigamiApp: React.FC = () => {
 
     client.onFrame((frameEvent) => {
       // Profiling telemetry breakdown collection
-      if (typeof window !== 'undefined') {
-        const prof = ((window as any).__ORIGAMI_PROFILING__ = (window as any).__ORIGAMI_PROFILING__ || {
-          workerTickDurationMs: [],
-          timeBetweenWorkerPostsMs: [],
-          postMessageToOnFrameMs: [],
-          mainThreadBufferCopyMs: [],
-          computeVertexNormalsMs: [],
-          threeRenderMs: [],
-          gpuTimerQueryMs: [],
-          rendererInfo: { calls: 0, triangles: 0, points: 0, lines: 0, frame: 0 },
-        });
+      const prof = getOrigamiProfiling();
+      if (prof) {
 
         if (frameEvent.stats.postTimestamp) {
-          prof.postMessageToOnFrameMs.push(performance.now() - frameEvent.stats.postTimestamp);
+          const nowAbs = (typeof performance !== 'undefined' && performance.timeOrigin)
+            ? (performance.timeOrigin + performance.now())
+            : Date.now();
+          prof.postMessageToOnFrameMs.push(Math.max(0, nowAbs - frameEvent.stats.postTimestamp));
           if (prof.postMessageToOnFrameMs.length > 500) prof.postMessageToOnFrameMs.shift();
         }
         if (frameEvent.stats.tickDurationMs) {
@@ -348,101 +423,35 @@ export const ModernOrigamiApp: React.FC = () => {
     clientRef.current?.setBarycentricDrag(drag);
   }, [barycentricPin]);
 
+  const handlePreviewChange = useCallback((preview: CreasePreviewData | null) => {
+    previewCreaseRef.current = preview;
+    const hasPreview = !!(preview && preview.segments3D.length > 0);
+    if (hasPreview !== canCommitRef.current) {
+      canCommitRef.current = hasPreview;
+      setCanCommit(hasPreview);
+    }
+  }, []);
+
   const handleBarycentricDragMove = useCallback((targetPos: [number, number, number]) => {
     const curDrag = barycentricDragRef.current;
     if (curDrag) {
       curDrag.targetPos = targetPos;
       clientRef.current?.setBarycentricDrag(curDrag);
     }
-
-    const active = curDrag || barycentricDrag;
-
-    // Compute live crease preview synchronously
-    const pin = barycentricPinRef.current || barycentricPin;
-    const info = loadedInfoRef.current || loadedInfo;
-    const pos = positionsRef.current || positions;
-    if (pin && active && dragStartPosRef.current && info?.indices && info?.uvs && pos) {
-      const q0 = dragStartPosRef.current;
-      const qPrime = targetPos;
-      const pinPos = pin.targetPos;
-
-      const plane = computeBisectorPlane(q0, qPrime, pinPos);
-      if (plane) {
-        const meshView: TriMesh = {
-          numVertices: pos.length / 3,
-          numTriangles: info.indices.length / 3,
-          positions: pos as unknown as Float64Array,
-          uvs: info.uvs as unknown as Float64Array,
-          masses: new Float64Array(0),
-          velocities: new Float64Array(0),
-          indices: info.indices,
-          bars: [],
-          hinges: [],
-        };
-
-        let triIndices: number[] | undefined = undefined;
-        if (foldOnlyTopLayer) {
-          const startTri = active.point.triangleIndex;
-          const topIndices: number[] = [];
-          const zThreshold = pos[info.indices[startTri * 3 + 0] * 3 + 2] - 0.002;
-          for (let t = 0; t < meshView.numTriangles; t++) {
-            const v0 = info.indices[t * 3 + 0];
-            if (pos[v0 * 3 + 2] >= zThreshold) {
-              topIndices.push(t);
-            }
-          }
-          triIndices = topIndices;
-        }
-
-        const sliceRes = sliceMeshWithPlane(meshView, plane, {
-          snapEps: 0.0005,
-          triangleIndices: triIndices,
-        });
-
-        if (sliceRes.segments3D.length > 0 && sliceRes.polylinesUV.length > 0) {
-          const isValley = (qPrime[2] - q0[2]) >= -1e-4;
-          const flap = floodFillFlap(
-            meshView,
-            active.point.triangleIndex,
-            sliceRes.creaseEdgeKeys
-          );
-
-          const previewData: CreasePreviewData = {
-            plane,
-            segments3D: sliceRes.segments3D,
-            polylinesUV: sliceRes.polylinesUV,
-            flapTriangles: flap.flapTriangles,
-            assignment: (isValley ? 'V' : 'M') as import('../../engine/types').EdgeAssignment,
-            foldAngleDeg: 177,
-          };
-          previewCreaseRef.current = previewData;
-          setPreviewCrease(previewData);
-        } else {
-          previewCreaseRef.current = null;
-          setPreviewCrease(null);
-        }
-      } else {
-        previewCreaseRef.current = null;
-        setPreviewCrease(null);
-      }
-    }
-
-    setBarycentricDrag((prev) => {
-      const cur = curDrag || prev;
-      if (!cur) return null;
-      return { ...cur, targetPos };
-    });
-  }, [barycentricPin, barycentricDrag, foldOnlyTopLayer, loadedInfo, positions]);
+  }, []);
 
   const handleBarycentricDragEnd = useCallback(() => {
     barycentricDragRef.current = null;
     dragStartPosRef.current = null;
+    previewCreaseRef.current = null;
+    canCommitRef.current = false;
+    setCanCommit(false);
     setBarycentricDrag(null);
     clientRef.current?.setBarycentricDrag(null);
   }, []);
 
   const handleCommitCrease = useCallback(() => {
-    const prev = previewCreaseRef.current || previewCrease;
+    const prev = previewCreaseRef.current;
     if (!prev || prev.polylinesUV.length === 0) return;
     clientRef.current?.commitCrease(
       prev.polylinesUV,
@@ -451,8 +460,9 @@ export const ModernOrigamiApp: React.FC = () => {
       500
     );
     previewCreaseRef.current = null;
-    setPreviewCrease(null);
-  }, [previewCrease]);
+    canCommitRef.current = false;
+    setCanCommit(false);
+  }, []);
 
   const handlePressFlat = useCallback(() => {
     clientRef.current?.pressFlat(3.0);
@@ -460,19 +470,29 @@ export const ModernOrigamiApp: React.FC = () => {
 
   const handleUndo = useCallback(() => {
     clientRef.current?.undo();
-    setPreviewCrease(null);
+    previewCreaseRef.current = null;
+    canCommitRef.current = false;
+    setCanCommit(false);
   }, []);
 
   const handleRedo = useCallback(() => {
     clientRef.current?.redo();
-    setPreviewCrease(null);
+    previewCreaseRef.current = null;
+    canCommitRef.current = false;
+    setCanCommit(false);
   }, []);
 
   useEffect(() => {
     const handleKeyDown = (e: KeyboardEvent) => {
       if (e.key === 'Escape') {
+        if (is3dFullscreen) {
+          toggle3dFullscreen();
+          return;
+        }
         handleClearBarycentricPin();
-        setPreviewCrease(null);
+        previewCreaseRef.current = null;
+        canCommitRef.current = false;
+        setCanCommit(false);
       } else if (e.key === 'c' || e.key === 'C') {
         handleCommitCrease();
       } else if (e.key === 'f' || e.key === 'F') {
@@ -487,7 +507,7 @@ export const ModernOrigamiApp: React.FC = () => {
     };
     window.addEventListener('keydown', handleKeyDown);
     return () => window.removeEventListener('keydown', handleKeyDown);
-  }, [handleClearBarycentricPin, handleCommitCrease, handlePressFlat, handleUndo, handleRedo]);
+  }, [handleClearBarycentricPin, handleCommitCrease, handlePressFlat, handleUndo, handleRedo, is3dFullscreen, toggle3dFullscreen]);
 
   useEffect(() => {
     (window as any).__ORIGAMI_TEST_API__ = {
@@ -499,7 +519,7 @@ export const ModernOrigamiApp: React.FC = () => {
       pressFlat: handlePressFlat,
       undo: handleUndo,
       redo: handleRedo,
-      getPreview: () => previewCreaseRef.current || previewCrease,
+      getPreview: () => previewCreaseRef.current,
       getFold: () => currentFold,
       foldOnlyTopLayer,
       setFoldOnlyTopLayer,
@@ -507,8 +527,10 @@ export const ModernOrigamiApp: React.FC = () => {
       getStats: () => stats,
       getLatency: () => latencyMs,
       getPositions: () => positions,
+      toggle3dFullscreen,
+      is3dFullscreen,
     };
-  }, [handleSetBarycentricPin, handleBarycentricDragStart, handleBarycentricDragMove, handleBarycentricDragEnd, handleCommitCrease, handlePressFlat, handleUndo, handleRedo, previewCrease, currentFold, foldOnlyTopLayer, stats, latencyMs, positions]);
+  }, [handleSetBarycentricPin, handleBarycentricDragStart, handleBarycentricDragMove, handleBarycentricDragEnd, handleCommitCrease, handlePressFlat, handleUndo, handleRedo, canCommit, currentFold, foldOnlyTopLayer, stats, latencyMs, positions, toggle3dFullscreen, is3dFullscreen]);
 
   // Play / Pause animation loop
   useEffect(() => {
@@ -701,6 +723,25 @@ export const ModernOrigamiApp: React.FC = () => {
             </button>
           </div>
 
+          {/* Full Screen 3D Button in Toolbar */}
+          <button
+            onClick={toggle3dFullscreen}
+            className="flex items-center space-x-1.5 px-2.5 py-1 text-xs font-medium text-gray-700 bg-gray-100 hover:bg-gray-200 hover:text-indigo-600 rounded-md border border-gray-300 transition-colors"
+            title="Toggle 3D Simulation Full Screen (Esc to exit)"
+          >
+            {is3dFullscreen ? (
+              <>
+                <Minimize2 className="w-3.5 h-3.5 text-indigo-600" />
+                <span>Exit Fullscreen</span>
+              </>
+            ) : (
+              <>
+                <Maximize2 className="w-3.5 h-3.5 text-indigo-600" />
+                <span>Full Screen 3D</span>
+              </>
+            )}
+          </button>
+
           {barycentricPin && (
             <button
               onClick={handleClearBarycentricPin}
@@ -715,9 +756,9 @@ export const ModernOrigamiApp: React.FC = () => {
           <div className="flex items-center space-x-1 pl-2 border-l border-gray-200">
             <button
               onClick={handleCommitCrease}
-              disabled={!previewCrease}
+              disabled={!canCommit}
               className={`flex items-center space-x-1 px-2.5 py-1 text-xs font-semibold rounded border transition-colors ${
-                previewCrease
+                canCommit
                   ? 'bg-emerald-600 text-white border-emerald-700 shadow-sm'
                   : 'bg-gray-100 text-gray-400 border-gray-200 cursor-not-allowed'
               }`}
@@ -782,7 +823,194 @@ export const ModernOrigamiApp: React.FC = () => {
         </div>
 
         {/* Right Viewport: 3D Interactive Three.js Canvas */}
-        <div className="relative flex flex-col h-full min-h-[350px]">
+        <div
+          ref={viewport3dRef}
+          className={
+            is3dFullscreen
+              ? 'fixed inset-0 z-50 bg-slate-950 flex flex-col w-screen h-screen overflow-hidden select-none p-0'
+              : 'relative flex flex-col h-full min-h-[350px]'
+          }
+        >
+          {/* Top-left Full Screen toggle button in standard view */}
+          {!is3dFullscreen && (
+            <div className="absolute top-3 left-3 z-20">
+              <button
+                onClick={toggle3dFullscreen}
+                className="flex items-center space-x-1.5 px-3 py-1.5 bg-white/90 hover:bg-white text-gray-700 hover:text-indigo-600 backdrop-blur-sm border border-gray-200 rounded-lg shadow-sm text-xs font-semibold transition-all hover:shadow cursor-pointer"
+                title="Full Screen 3D Simulation (Esc to exit)"
+              >
+                <Maximize2 className="w-3.5 h-3.5 text-indigo-600" />
+                <span>Full Screen</span>
+              </button>
+            </div>
+          )}
+
+          {/* Fullscreen Overlay Header Bar */}
+          {is3dFullscreen && (
+            <div className="absolute top-3 left-3 right-3 z-30 flex items-center justify-between pointer-events-none">
+              {/* Left action pill */}
+              <div className="pointer-events-auto flex items-center space-x-2 bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-xl px-3 py-2 shadow-xl text-xs text-slate-200">
+                <span className="font-semibold text-indigo-400 flex items-center space-x-1 mr-1">
+                  <Layers className="w-4 h-4" />
+                  <span>3D Simulation</span>
+                </span>
+                <div className="h-4 w-px bg-slate-700 mx-1" />
+                
+                {/* Tool selector */}
+                <div className="flex items-center bg-slate-800 p-0.5 rounded-lg border border-slate-700">
+                  <button
+                    onClick={() => setActiveTool('pivot')}
+                    className={`flex items-center space-x-1 px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
+                      activeTool === 'pivot'
+                        ? 'bg-amber-600 text-white shadow-sm'
+                        : 'text-slate-300 hover:bg-slate-700'
+                    }`}
+                    title="Pivot Tool: Click paper to place pivot pin P (Esc to clear)"
+                  >
+                    <span>📍 Pivot</span>
+                  </button>
+                  <button
+                    onClick={() => setActiveTool('drag')}
+                    className={`flex items-center space-x-1 px-2.5 py-1 text-xs font-medium rounded-md transition-colors ${
+                      activeTool === 'drag'
+                        ? 'bg-indigo-600 text-white shadow-sm'
+                        : 'text-slate-300 hover:bg-slate-700'
+                    }`}
+                    title="Drag Tool: Left-drag paper to pull Q with lift (Right-drag to orbit)"
+                  >
+                    <span>✋ Drag</span>
+                  </button>
+                </div>
+
+                {barycentricPin && (
+                  <button
+                    onClick={handleClearBarycentricPin}
+                    className="px-2 py-1 text-xs font-medium text-amber-300 bg-amber-950/80 hover:bg-amber-900/80 rounded-md border border-amber-700/60 transition-colors"
+                    title="Clear active pivot pin P"
+                  >
+                    ✕ Clear Pin
+                  </button>
+                )}
+
+                <div className="h-4 w-px bg-slate-700 mx-1" />
+
+                <button
+                  onClick={handleCommitCrease}
+                  disabled={!canCommit}
+                  className={`flex items-center space-x-1 px-2.5 py-1 text-xs font-semibold rounded-md border transition-colors ${
+                    canCommit
+                      ? 'bg-emerald-600 text-white border-emerald-500 shadow-sm'
+                      : 'bg-slate-800 text-slate-500 border-slate-700 cursor-not-allowed'
+                  }`}
+                  title="Commit emergent crease line into mesh (C)"
+                >
+                  <span>Commit Crease (C)</span>
+                </button>
+
+                <button
+                  onClick={handlePressFlat}
+                  className="px-2 py-1 text-xs font-medium bg-blue-950/80 text-blue-300 border border-blue-700/60 hover:bg-blue-900/80 rounded-md transition-colors"
+                  title="Press flat (F)"
+                >
+                  <span>Press Flat (F)</span>
+                </button>
+
+                <button
+                  onClick={handleUndo}
+                  className="px-2 py-1 text-xs font-medium bg-slate-800 text-slate-300 hover:bg-slate-700 rounded-md border border-slate-700 transition-colors"
+                  title="Undo (Ctrl+Z)"
+                >
+                  <span>Undo</span>
+                </button>
+
+                <button
+                  onClick={handleRedo}
+                  className="px-2 py-1 text-xs font-medium bg-slate-800 text-slate-300 hover:bg-slate-700 rounded-md border border-slate-700 transition-colors"
+                  title="Redo (Ctrl+Y)"
+                >
+                  <span>Redo</span>
+                </button>
+              </div>
+
+              {/* Right pill: Telemetry badge + Exit Fullscreen button */}
+              <div className="pointer-events-auto flex items-center space-x-3">
+                <div className="bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-xl px-3 py-1.5 shadow-xl text-xs flex items-center space-x-4 text-slate-300">
+                  <div>
+                    <span className="text-slate-400 mr-1.5">FPS:</span>
+                    <span className="font-mono font-semibold text-emerald-400">{fps}</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 mr-1.5">Latency:</span>
+                    <span className="font-mono text-slate-200">{latencyMs.toFixed(1)} ms</span>
+                  </div>
+                  <div>
+                    <span className="text-slate-400 mr-1.5">Step:</span>
+                    <span className="font-mono text-slate-200">
+                      {stats?.stepDurationMs ? `${stats.stepDurationMs.toFixed(2)} ms` : stats?.tickDurationMs ? `${stats.tickDurationMs.toFixed(2)} ms` : '-'}
+                    </span>
+                  </div>
+                </div>
+
+                <button
+                  onClick={toggle3dFullscreen}
+                  className="flex items-center space-x-1.5 px-3.5 py-2 bg-indigo-600 hover:bg-indigo-500 text-white rounded-xl shadow-xl text-xs font-semibold transition-all hover:scale-105 active:scale-95 cursor-pointer border border-indigo-400/30"
+                  title="Exit Full Screen (Esc)"
+                >
+                  <Minimize2 className="w-4 h-4" />
+                  <span>Exit Full Screen</span>
+                  <span className="text-[10px] bg-indigo-700 px-1.5 py-0.5 rounded text-indigo-200 font-mono">Esc</span>
+                </button>
+              </div>
+            </div>
+          )}
+
+          {/* Floating Bottom Playback Pill in Fullscreen Mode */}
+          {is3dFullscreen && (
+            <div className="absolute bottom-6 left-1/2 -translate-x-1/2 z-30 pointer-events-auto flex items-center space-x-3 bg-slate-900/90 backdrop-blur-md border border-slate-700/80 rounded-2xl px-5 py-2.5 shadow-2xl text-xs text-slate-200 min-w-[340px] max-w-lg">
+              <button
+                onClick={() => setIsPlaying(!isPlaying)}
+                className={`p-2 rounded-full transition-colors shadow-sm ${
+                  isPlaying
+                    ? 'bg-amber-500 hover:bg-amber-600 text-white'
+                    : 'bg-indigo-600 hover:bg-indigo-700 text-white'
+                }`}
+                title={isPlaying ? 'Pause' : 'Play Fold Animation'}
+              >
+                {isPlaying ? <Pause className="w-3.5 h-3.5" /> : <Play className="w-3.5 h-3.5 ml-0.5" />}
+              </button>
+              <button
+                onClick={() => {
+                  handleAlphaChange(0);
+                  clientRef.current?.reset();
+                }}
+                className="p-1.5 text-slate-400 hover:text-white hover:bg-slate-800 rounded-lg transition-colors"
+                title="Reset to Flat"
+              >
+                <RotateCcw className="w-3.5 h-3.5" />
+              </button>
+              <button
+                onClick={() => clientRef.current?.seedFromFlat()}
+                className="flex items-center space-x-1 px-2 py-1 text-xs font-medium text-indigo-300 bg-indigo-950/70 hover:bg-indigo-900/70 rounded-lg border border-indigo-700/50 transition-colors"
+                title="Apply One-Time Seed Perturbation"
+              >
+                <Sparkles className="w-3 h-3 text-indigo-400" />
+                <span>Perturb</span>
+              </button>
+              <div className="flex-1 flex items-center space-x-2">
+                <span className="font-mono text-slate-400 text-[11px] min-w-[35px]">{(alpha * 100).toFixed(0)}%</span>
+                <input
+                  type="range"
+                  min="0"
+                  max="1"
+                  step="0.005"
+                  value={alpha}
+                  onChange={(e) => handleAlphaChange(parseFloat(e.target.value))}
+                  className="flex-1 h-1.5 bg-slate-700 rounded-lg appearance-none cursor-pointer accent-indigo-500"
+                />
+              </div>
+            </div>
+          )}
+
           <OrigamiModernCanvas
             indices={loadedInfo?.indices ?? null}
             positions={positions}
@@ -795,39 +1023,41 @@ export const ModernOrigamiApp: React.FC = () => {
             barycentricPin={barycentricPin}
             barycentricDrag={barycentricDrag}
             reachRadius={reachRadius}
-            previewCrease={previewCrease}
+            previewCrease={previewCreaseRef.current}
             foldOnlyTopLayer={foldOnlyTopLayer}
-            onPreviewChange={setPreviewCrease}
+            onPreviewChange={handlePreviewChange}
             onSetBarycentricPin={handleSetBarycentricPin}
             onBarycentricDragStart={handleBarycentricDragStart}
             onBarycentricDragMove={handleBarycentricDragMove}
             onBarycentricDragEnd={handleBarycentricDragEnd}
-            className="h-full"
+            className="h-full w-full"
           />
 
-          {/* Floating Telemetry Badge on 3D View */}
-          <div className="absolute top-3 right-3 bg-white/90 backdrop-blur-sm border border-gray-200 rounded-lg shadow-sm px-3 py-2 text-xs space-y-1">
-            <div className="flex items-center justify-between space-x-4">
-              <span className="text-gray-500">Render FPS:</span>
-              <span className="font-mono font-semibold text-emerald-600">{fps} FPS</span>
+          {/* Floating Telemetry Badge on 3D View (standard view) */}
+          {!is3dFullscreen && (
+            <div className="absolute top-3 right-3 bg-white/90 backdrop-blur-sm border border-gray-200 rounded-lg shadow-sm px-3 py-2 text-xs space-y-1">
+              <div className="flex items-center justify-between space-x-4">
+                <span className="text-gray-500">Render FPS:</span>
+                <span className="font-mono font-semibold text-emerald-600">{fps} FPS</span>
+              </div>
+              <div className="flex items-center justify-between space-x-4">
+                <span className="text-gray-500">Worker Latency:</span>
+                <span className="font-mono font-semibold text-gray-700">{latencyMs.toFixed(1)} ms</span>
+              </div>
+              <div className="flex items-center justify-between space-x-4">
+                <span className="text-gray-500">Step Time:</span>
+                <span className="font-mono text-gray-700">
+                  {stats?.stepDurationMs ? `${stats.stepDurationMs.toFixed(2)} ms` : stats?.tickDurationMs ? `${stats.tickDurationMs.toFixed(2)} ms` : '-'}
+                </span>
+              </div>
+              <div className="flex items-center justify-between space-x-4">
+                <span className="text-gray-500">XPBD Passes:</span>
+                <span className="font-mono text-gray-700">
+                  {stats?.iterationsPerTick ? `${stats.iterationsPerTick} passes` : '-'}
+                </span>
+              </div>
             </div>
-            <div className="flex items-center justify-between space-x-4">
-              <span className="text-gray-500">Worker Latency:</span>
-              <span className="font-mono font-semibold text-gray-700">{latencyMs.toFixed(1)} ms</span>
-            </div>
-            <div className="flex items-center justify-between space-x-4">
-              <span className="text-gray-500">Step Time:</span>
-              <span className="font-mono text-gray-700">
-                {stats?.stepDurationMs ? `${stats.stepDurationMs.toFixed(2)} ms` : stats?.tickDurationMs ? `${stats.tickDurationMs.toFixed(2)} ms` : '-'}
-              </span>
-            </div>
-            <div className="flex items-center justify-between space-x-4">
-              <span className="text-gray-500">XPBD Passes:</span>
-              <span className="font-mono text-gray-700">
-                {stats?.iterationsPerTick ? `${stats.iterationsPerTick} passes` : '-'}
-              </span>
-            </div>
-          </div>
+          )}
         </div>
       </div>
 

@@ -3,6 +3,13 @@ import { accumulateBarForces, computeMaxBarStrain } from './bars';
 import { accumulateHingeForces, computeDihedralAngle } from './hinges';
 import { FoldSolver, SolveResult, BarycentricPoint, BarycentricAttachment } from './types';
 import { assertFinite, isMeshFinite } from './validation';
+import {
+  SpatialHash,
+  generateSelfContacts,
+  solveContactsXPBD,
+  ContactData,
+  countMeshIntersections,
+} from './collision';
 
 export interface XPBDSolverOptions {
   substeps?: number;
@@ -27,6 +34,10 @@ export interface XPBDSolverOptions {
   yieldAngle?: number;
   springbackFactor?: number;
   enablePlasticity?: boolean;
+
+  // Phase 9: Self-collision via XPBD
+  enableSelfCollision?: boolean;
+  selfCollisionMargin?: number;
 }
 
 /**
@@ -71,6 +82,11 @@ export class XPBDSolver implements FoldSolver {
   yieldAngle: number;
   springbackFactor: number;
   enablePlasticity: boolean;
+
+  // Phase 9: Self-collision via XPBD
+  enableSelfCollision: boolean;
+  private spatialHash: SpatialHash;
+  private selfContacts: ContactData[] = [];
 
   // Flattened constraint topology arrays for cache-friendly execution
   private numBars: number;
@@ -133,6 +149,12 @@ export class XPBDSolver implements FoldSolver {
     this.yieldAngle = options.yieldAngle ?? (2.86 * Math.PI / 180); // ~0.05 rad
     this.springbackFactor = options.springbackFactor ?? 0.05;
     this.enablePlasticity = options.enablePlasticity ?? false;
+
+    // Phase 9: Self-collision via XPBD
+    this.enableSelfCollision = options.enableSelfCollision ?? false;
+    const margin = options.selfCollisionMargin ?? Math.max(0.05, this.paperThickness * 2);
+    this.spatialHash = new SpatialHash(margin);
+    this.spatialHash.initTopology(this.mesh.indices, this.mesh.numTriangles, this.mesh.uvs);
 
     this.posStar = new Float64Array(numV * 3);
     this.forcesBuffer = new Float64Array(numV * 3);
@@ -251,6 +273,17 @@ export class XPBDSolver implements FoldSolver {
       const clamped = Math.max(0, Math.min(100, preset));
       this.bendingCompliance = 0.05 * Math.pow(10, -4 * (clamped / 100));
     }
+  }
+
+  setSelfCollision(enable: boolean, margin?: number): void {
+    this.enableSelfCollision = enable;
+    if (margin !== undefined) {
+      this.spatialHash.setCellSize(margin);
+    }
+  }
+
+  checkSelfIntersections(): { intersectionCount: number; intersectingPairs: [number, number][] } {
+    return countMeshIntersections(this.mesh.positions, this.mesh.indices, this.mesh.numTriangles, this.mesh.uvs);
   }
 
   setBarycentricPins(pins: BarycentricAttachment[]): void {
@@ -615,7 +648,26 @@ export class XPBDSolver implements FoldSolver {
           }
         }
 
-        // --- C. Distance Constraints (Axial Bars - exact inextensibility alpha = 0) ---
+        // --- C. Phase 9: Self-Collision XPBD Constraint (Vertex-Triangle & Edge-Edge) ---
+        if (this.enableSelfCollision) {
+          this.spatialHash.build(posStar, this.mesh.indices, this.mesh.numTriangles, this.paperThickness);
+          const pairs = this.spatialHash.queryCandidatePairs();
+          if (pairs.length > 0) {
+            generateSelfContacts(pairs, posStar, this.mesh.indices, this.paperThickness, this.selfContacts);
+            if (this.selfContacts.length > 0) {
+              solveContactsXPBD(
+                this.selfContacts,
+                posStar,
+                pos,
+                invMass,
+                this.muStatic,
+                this.muKinetic
+              );
+            }
+          }
+        }
+
+        // --- D. Distance Constraints (Axial Bars - exact inextensibility alpha = 0) ---
         // Running bars last with dedicated distance iterations eliminates residual strain under drag
         for (let dIter = 0; dIter < this.distanceIterations; dIter++) {
           for (let b = 0; b < numBars; b++) {
@@ -667,6 +719,7 @@ export class XPBDSolver implements FoldSolver {
           }
         }
       }
+
 
       // 3. Update velocities and commit positions
       const damp = this.velocityDamping;

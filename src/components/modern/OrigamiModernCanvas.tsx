@@ -1,4 +1,4 @@
-import React, { useRef, useEffect, useMemo, useState } from 'react';
+import React, { useRef, useEffect, useMemo, useState, useCallback } from 'react';
 import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls, Center } from '@react-three/drei';
 import * as THREE from 'three';
@@ -16,19 +16,23 @@ export interface CreasePreviewData {
 }
 
 const ThreeProfiler: React.FC = () => {
-  const { gl } = useThree();
+  const { gl, scene, camera } = useThree();
 
   useEffect(() => {
     if (!gl) return;
+    if (typeof window !== 'undefined') {
+      (window as any).__ORIGAMI_THREE__ = { gl, scene, camera };
+    }
     const origRender = gl.render.bind(gl);
     const glCtx = gl.getContext() as WebGL2RenderingContext;
     const extTimer = glCtx?.getExtension?.('EXT_disjoint_timer_query_webgl2');
 
     let activeQuery: WebGLQuery | null = null;
+    let queryInProgress = false;
 
     gl.render = (scene: THREE.Scene, camera: THREE.Camera) => {
       // Check previous query result
-      if (extTimer && activeQuery && glCtx) {
+      if (extTimer && activeQuery && glCtx && !queryInProgress) {
         const available = glCtx.getQueryParameter(activeQuery, glCtx.QUERY_RESULT_AVAILABLE);
         const disjoint = glCtx.getParameter(extTimer.GPU_DISJOINT_EXT);
         if (available && !disjoint) {
@@ -51,6 +55,7 @@ const ThreeProfiler: React.FC = () => {
         activeQuery = glCtx.createQuery();
         if (activeQuery) {
           glCtx.beginQuery(extTimer.TIME_ELAPSED_EXT, activeQuery);
+          queryInProgress = true;
         }
       }
 
@@ -58,8 +63,9 @@ const ThreeProfiler: React.FC = () => {
       origRender(scene, camera);
       const renderMs = performance.now() - t0;
 
-      if (extTimer && activeQuery && glCtx) {
+      if (extTimer && queryInProgress && glCtx) {
         glCtx.endQuery(extTimer.TIME_ELAPSED_EXT);
+        queryInProgress = false;
       }
 
       const prof = (window as any).__ORIGAMI_PROFILING__;
@@ -210,7 +216,12 @@ const PaperMesh: React.FC<{
   const dragPlaneRef = useRef<THREE.Plane | null>(null);
   const latestTargetRef = useRef<[number, number, number] | null>(null);
   const rafIdRef = useRef<number | null>(null);
-  const { camera } = useThree();
+  const lastSliceQRef = useRef<[number, number, number]>([0, 0, 0]);
+  const lastPreviewDataRef = useRef<CreasePreviewData | null>(null);
+  const updatePreviewGeometryRef = useRef<(preview: CreasePreviewData | null) => void>(() => {});
+  const { camera, gl } = useThree();
+  const dragRaycasterRef = useRef<THREE.Raycaster>(new THREE.Raycaster());
+  const dragPointerVec2 = useRef<THREE.Vector2>(new THREE.Vector2());
 
   const handlePointerDown = (e: any) => {
     if (e.nativeEvent?.button !== 0) return; // Right click orbits
@@ -289,12 +300,18 @@ const PaperMesh: React.FC<{
     }
   };
 
-  const handlePointerMove = (e: any) => {
+  const processDragMove = useCallback((clientX: number, clientY: number) => {
     if (!isDraggingRef.current || !activeDragRef.current || !dragPlaneRef.current) return;
-    e.stopPropagation();
 
-    const ray = e.ray;
-    if (!ray) return;
+    const canvas = gl.domElement;
+    const rect = canvas.getBoundingClientRect();
+    const ndcX = ((clientX - rect.left) / rect.width) * 2 - 1;
+    const ndcY = -((clientY - rect.top) / rect.height) * 2 + 1;
+
+    dragPointerVec2.current.set(ndcX, ndcY);
+    dragRaycasterRef.current.setFromCamera(dragPointerVec2.current, camera);
+    const ray = dragRaycasterRef.current.ray;
+
     const targetWorld = new THREE.Vector3();
     if (!ray.intersectPlane(dragPlaneRef.current, targetWorld)) return;
 
@@ -335,73 +352,104 @@ const PaperMesh: React.FC<{
             const qPrime = latestTargetRef.current;
             const pinPos = barycentricPin.targetPos;
 
-            const plane = computeBisectorPlane(q0, qPrime, pinPos);
-            if (plane) {
-              const meshView: TriMesh = {
-                numVertices: positions.length / 3,
-                numTriangles: indices.length / 3,
-                positions: positions as unknown as Float64Array,
-                uvs: uvs as unknown as Float64Array,
-                masses: new Float64Array(0),
-                velocities: new Float64Array(0),
-                indices,
-                bars: [],
-                hinges: [],
-              };
+            const dx = qPrime[0] - lastSliceQRef.current[0];
+            const dy = qPrime[1] - lastSliceQRef.current[1];
+            const dz = qPrime[2] - lastSliceQRef.current[2];
+            const movedDist = Math.hypot(dx, dy, dz);
 
-              let triIndices: number[] | undefined = undefined;
-              if (foldOnlyTopLayer) {
-                const startTri = activeDragRef.current.point.triangleIndex;
-                const topIndices: number[] = [];
-                const zThreshold = positions[indices[startTri * 3 + 0] * 3 + 2] - 0.002;
-                for (let t = 0; t < meshView.numTriangles; t++) {
-                  const v0 = indices[t * 3 + 0];
-                  if (positions[v0 * 3 + 2] >= zThreshold) {
-                    topIndices.push(t);
+            if (movedDist >= 0.0005 || !lastPreviewDataRef.current) {
+              lastSliceQRef.current = [qPrime[0], qPrime[1], qPrime[2]];
+              const tSlice0 = performance.now();
+              const plane = computeBisectorPlane(q0, qPrime, pinPos);
+              if (plane) {
+                const meshView: TriMesh = {
+                  numVertices: positions.length / 3,
+                  numTriangles: indices.length / 3,
+                  positions: positions as unknown as Float64Array,
+                  uvs: uvs as unknown as Float64Array,
+                  masses: new Float64Array(0),
+                  velocities: new Float64Array(0),
+                  indices,
+                  bars: [],
+                  hinges: [],
+                };
+
+                let triIndices: number[] | undefined = undefined;
+                if (foldOnlyTopLayer) {
+                  const startTri = activeDragRef.current.point.triangleIndex;
+                  const topIndices: number[] = [];
+                  const zThreshold = positions[indices[startTri * 3 + 0] * 3 + 2] - 0.002;
+                  for (let t = 0; t < meshView.numTriangles; t++) {
+                    const v0 = indices[t * 3 + 0];
+                    if (positions[v0 * 3 + 2] >= zThreshold) {
+                      topIndices.push(t);
+                    }
                   }
+                  triIndices = topIndices;
                 }
-                triIndices = topIndices;
-              }
 
-              const sliceRes = sliceMeshWithPlane(meshView, plane, {
-                snapEps: 0.0005,
-                triangleIndices: triIndices,
-              });
-
-              if (sliceRes.segments3D.length > 0 && sliceRes.polylinesUV.length > 0) {
-                const isValley = (qPrime[2] - q0[2]) >= -1e-4;
-                const flap = floodFillFlap(
-                  meshView,
-                  activeDragRef.current.point.triangleIndex,
-                  sliceRes.creaseEdgeKeys
-                );
-
-                onPreviewChange?.({
-                  plane,
-                  segments3D: sliceRes.segments3D,
-                  polylinesUV: sliceRes.polylinesUV,
-                  flapTriangles: flap.flapTriangles,
-                  assignment: isValley ? 'V' : 'M',
-                  foldAngleDeg: 177,
+                const sliceRes = sliceMeshWithPlane(meshView, plane, {
+                  snapEps: 0.0005,
+                  triangleIndices: triIndices,
                 });
+
+                if (sliceRes.segments3D.length > 0 && sliceRes.polylinesUV.length > 0) {
+                  const isValley = (qPrime[2] - q0[2]) >= -1e-4;
+                  const flap = floodFillFlap(
+                    meshView,
+                    activeDragRef.current.point.triangleIndex,
+                    sliceRes.creaseEdgeKeys
+                  );
+
+                  const previewData: CreasePreviewData = {
+                    plane,
+                    segments3D: sliceRes.segments3D,
+                    polylinesUV: sliceRes.polylinesUV,
+                    flapTriangles: flap.flapTriangles,
+                    assignment: isValley ? 'V' : 'M',
+                    foldAngleDeg: 177,
+                  };
+                  lastPreviewDataRef.current = previewData;
+                  updatePreviewGeometryRef.current(previewData);
+                  onPreviewChange?.(previewData);
+                } else {
+                  lastPreviewDataRef.current = null;
+                  updatePreviewGeometryRef.current(null);
+                  onPreviewChange?.(null);
+                }
               } else {
+                lastPreviewDataRef.current = null;
+                updatePreviewGeometryRef.current(null);
                 onPreviewChange?.(null);
               }
-            } else {
-              onPreviewChange?.(null);
+
+              const sliceMs = performance.now() - tSlice0;
+              if (typeof window !== 'undefined' && (window as any).__ORIGAMI_PROFILING__) {
+                const prof = (window as any).__ORIGAMI_PROFILING__;
+                prof.previewSlicingMs = prof.previewSlicingMs || [];
+                prof.previewSlicingMs.push(sliceMs);
+                if (prof.previewSlicingMs.length > 500) prof.previewSlicingMs.shift();
+              }
             }
           }
         }
       });
     }
+  }, [camera, gl, barycentricPin, positions, indices, uvs, foldOnlyTopLayer, onBarycentricDragMove, onPreviewChange, paperThickness]);
+
+  const handlePointerMove = (e: any) => {
+    if (!isDraggingRef.current) return;
+    e.stopPropagation();
+    processDragMove(e.clientX, e.clientY);
   };
 
-  const handlePointerUp = (e: any) => {
+  const endDrag = useCallback(() => {
     if (isDraggingRef.current) {
-      e.stopPropagation();
       isDraggingRef.current = false;
       activeDragRef.current = null;
       dragPlaneRef.current = null;
+      lastPreviewDataRef.current = null;
+      updatePreviewGeometryRef.current(null);
       onDragStateChange?.(false);
       if (orbitControlsRef.current) orbitControlsRef.current.enabled = true;
       if (rafIdRef.current) {
@@ -409,11 +457,35 @@ const PaperMesh: React.FC<{
         rafIdRef.current = null;
       }
       onBarycentricDragEnd?.();
+    }
+  }, [onDragStateChange, onBarycentricDragEnd, orbitControlsRef]);
+
+  const handlePointerUp = (e: any) => {
+    if (isDraggingRef.current) {
+      e.stopPropagation();
+      endDrag();
       try {
         e.target?.releasePointerCapture?.(e.pointerId);
       } catch {}
     }
   };
+
+  useEffect(() => {
+    const onWindowMove = (e: PointerEvent) => {
+      if (isDraggingRef.current) {
+        processDragMove(e.clientX, e.clientY);
+      }
+    };
+    const onWindowUp = () => {
+      endDrag();
+    };
+    window.addEventListener('pointermove', onWindowMove);
+    window.addEventListener('pointerup', onWindowUp);
+    return () => {
+      window.removeEventListener('pointermove', onWindowMove);
+      window.removeEventListener('pointerup', onWindowUp);
+    };
+  }, [processDragMove, endDrag]);
 
   // Create persistent BufferGeometry instance once
   const geometry = useMemo(() => {
@@ -489,51 +561,115 @@ const PaperMesh: React.FC<{
     }
   }, [positions, geometry, creaseGeometry, creaseEdges, showCreases]);
 
-  // Live preview crease line geometry
-  const previewGeometry = useMemo(() => {
-    if (!previewCrease || previewCrease.segments3D.length === 0) return null;
-    const points: THREE.Vector3[] = [];
-    for (const seg of previewCrease.segments3D) {
-      points.push(new THREE.Vector3(seg[0][0], seg[0][1], seg[0][2] + 0.002));
-      points.push(new THREE.Vector3(seg[1][0], seg[1][1], seg[1][2] + 0.002));
-    }
-    const geo = new THREE.BufferGeometry().setFromPoints(points);
-    const line = new THREE.LineSegments(geo);
-    line.computeLineDistances();
-    return geo;
-  }, [previewCrease?.segments3D]);
+  // 1. Persistent in-place BufferGeometry for Live Dashed Crease Preview Line
+  const previewLineGeoRef = useRef<THREE.BufferGeometry | null>(null);
+  const previewLinePosBuf = useRef<Float32Array>(new Float32Array(3000)); // up to 500 segments
+  const previewLinePosAttr = useRef<THREE.BufferAttribute | null>(null);
+  const previewLineRef = useRef<THREE.LineSegments | null>(null);
 
-  // Live preview shaded flap overlay geometry
-  const flapGeometry = useMemo(() => {
-    if (!previewCrease || previewCrease.flapTriangles.size === 0 || !positions) return null;
+  if (!previewLineGeoRef.current) {
     const geo = new THREE.BufferGeometry();
-    const posAttr = new THREE.BufferAttribute(new Float32Array(positions), 3);
-    geo.setAttribute('position', posAttr);
+    const attr = new THREE.BufferAttribute(previewLinePosBuf.current, 3);
+    attr.setUsage(THREE.DynamicDrawUsage);
+    geo.setAttribute('position', attr);
+    geo.setDrawRange(0, 0);
+    previewLineGeoRef.current = geo;
+    previewLinePosAttr.current = attr;
+  }
 
-    const flapIndices: number[] = [];
-    for (const tri of previewCrease.flapTriangles) {
-      flapIndices.push(
-        indices[tri * 3 + 0],
-        indices[tri * 3 + 1],
-        indices[tri * 3 + 2]
-      );
-    }
-    geo.setIndex(new THREE.BufferAttribute(new Uint32Array(flapIndices), 1));
-    geo.computeVertexNormals();
-    return geo;
-  }, [previewCrease?.flapTriangles, positions, indices]);
+  // 2. Persistent in-place BufferGeometry for Moving Flap Overlay
+  const flapOverlayGeoRef = useRef<THREE.BufferGeometry | null>(null);
+  const flapIndexBuf = useRef<Uint32Array>(new Uint32Array(12000)); // up to 4000 triangles
+  const flapIndexAttr = useRef<THREE.BufferAttribute | null>(null);
 
-  // Keep flapGeometry positions in sync
+  if (!flapOverlayGeoRef.current) {
+    const geo = new THREE.BufferGeometry();
+    const indexAttr = new THREE.BufferAttribute(flapIndexBuf.current, 1);
+    indexAttr.setUsage(THREE.DynamicDrawUsage);
+    geo.setIndex(indexAttr);
+    geo.setDrawRange(0, 0);
+    flapOverlayGeoRef.current = geo;
+    flapIndexAttr.current = indexAttr;
+  }
+
+  // Bind flap overlay positions and normals directly to main paper geometry (zero reallocation)
   useEffect(() => {
-    if (flapGeometry && positions) {
-      const flapPosAttr = flapGeometry.getAttribute('position') as THREE.BufferAttribute;
-      if (flapPosAttr && flapPosAttr.array.length === positions.length) {
-        (flapPosAttr.array as Float32Array).set(positions);
-        flapPosAttr.needsUpdate = true;
-        flapGeometry.computeVertexNormals();
+    if (geometry && flapOverlayGeoRef.current) {
+      const posAttr = geometry.getAttribute('position');
+      const normAttr = geometry.getAttribute('normal');
+      if (posAttr) flapOverlayGeoRef.current.setAttribute('position', posAttr);
+      if (normAttr) flapOverlayGeoRef.current.setAttribute('normal', normAttr);
+    }
+  }, [geometry]);
+
+  // Update preview line and flap index buffer in-place
+  const updatePreviewGeometry = useCallback((preview: CreasePreviewData | null) => {
+    const previewGeo = previewLineGeoRef.current;
+    const flapGeo = flapOverlayGeoRef.current;
+    if (!previewGeo || !flapGeo) return;
+
+    const t0 = performance.now();
+
+    if (!preview || preview.segments3D.length === 0) {
+      previewGeo.setDrawRange(0, 0);
+      flapGeo.setDrawRange(0, 0);
+      return;
+    }
+
+    // In-place update of dashed line vertices (zero allocation)
+    const segs = preview.segments3D;
+    const numPts = segs.length * 2;
+    const posArr = previewLinePosBuf.current;
+    let pIdx = 0;
+    for (let i = 0; i < segs.length; i++) {
+      const s0 = segs[i][0];
+      const s1 = segs[i][1];
+      posArr[pIdx++] = s0[0];
+      posArr[pIdx++] = s0[1];
+      posArr[pIdx++] = s0[2] + 0.002;
+      posArr[pIdx++] = s1[0];
+      posArr[pIdx++] = s1[1];
+      posArr[pIdx++] = s1[2] + 0.002;
+    }
+    previewLinePosAttr.current!.needsUpdate = true;
+    previewGeo.setDrawRange(0, numPts);
+    if (previewLineRef.current) {
+      previewLineRef.current.computeLineDistances();
+      if (preview.assignment) {
+        ((previewLineRef.current.material as THREE.Material) as any)?.color?.set?.(
+          preview.assignment === 'M' ? '#ef4444' : '#3b82f6'
+        );
       }
     }
-  }, [positions, flapGeometry]);
+
+    // In-place update of flap indices (zero allocation)
+    if (preview.flapTriangles.size > 0 && indices) {
+      const idxArr = flapIndexBuf.current;
+      let fIdx = 0;
+      for (const tri of preview.flapTriangles) {
+        idxArr[fIdx++] = indices[tri * 3 + 0];
+        idxArr[fIdx++] = indices[tri * 3 + 1];
+        idxArr[fIdx++] = indices[tri * 3 + 2];
+      }
+      flapIndexAttr.current!.needsUpdate = true;
+      flapGeo.setDrawRange(0, fIdx);
+    } else {
+      flapGeo.setDrawRange(0, 0);
+    }
+
+    if (typeof window !== 'undefined' && (window as any).__ORIGAMI_PROFILING__) {
+      const prof = (window as any).__ORIGAMI_PROFILING__;
+      prof.geometryUpdateMs = prof.geometryUpdateMs || [];
+      prof.geometryUpdateMs.push(performance.now() - t0);
+      if (prof.geometryUpdateMs.length > 500) prof.geometryUpdateMs.shift();
+    }
+  }, [indices]);
+
+  updatePreviewGeometryRef.current = updatePreviewGeometry;
+
+  useEffect(() => {
+    updatePreviewGeometry(previewCrease || null);
+  }, [previewCrease, updatePreviewGeometry]);
 
   return (
     <group position={[-0.58, 0, -0.50]} rotation={[-Math.PI / 2, 0, 0]}>
@@ -556,7 +692,7 @@ const PaperMesh: React.FC<{
       </mesh>
 
       {/* Back Face: contrasting reverse paper color */}
-      <mesh geometry={geometry}>
+      <mesh geometry={geometry} raycast={() => null}>
         <meshStandardMaterial
           color={backColor}
           side={THREE.BackSide}
@@ -568,41 +704,37 @@ const PaperMesh: React.FC<{
         />
       </mesh>
 
-      {/* Moving Flap Shading Overlay */}
-      {flapGeometry && (
-        <mesh geometry={flapGeometry}>
-          <meshStandardMaterial
-            color="#38bdf8"
-            transparent
-            opacity={0.35}
-            roughness={0.5}
-            side={THREE.DoubleSide}
-            depthWrite={false}
-            polygonOffset
-            polygonOffsetFactor={-1}
-            polygonOffsetUnits={-1}
-          />
-        </mesh>
-      )}
+      {/* Moving Flap Shading Overlay (In-Place Dynamic Draw Range) */}
+      <mesh geometry={flapOverlayGeoRef.current!} raycast={() => null}>
+        <meshStandardMaterial
+          color="#38bdf8"
+          transparent
+          opacity={0.35}
+          roughness={0.5}
+          side={THREE.DoubleSide}
+          depthWrite={false}
+          polygonOffset
+          polygonOffsetFactor={-1}
+          polygonOffsetUnits={-1}
+        />
+      </mesh>
 
       {/* 3D Crease Lines */}
       {showCreases && creaseGeometry && (
-        <lineSegments geometry={creaseGeometry}>
+        <lineSegments geometry={creaseGeometry} raycast={() => null}>
           <lineBasicMaterial vertexColors linewidth={2} />
         </lineSegments>
       )}
 
-      {/* Live Dashed Crease Preview Line */}
-      {previewGeometry && previewCrease && (
-        <lineSegments geometry={previewGeometry}>
-          <lineDashedMaterial
-            color={previewCrease.assignment === 'M' ? '#ef4444' : '#3b82f6'}
-            dashSize={0.02}
-            gapSize={0.015}
-            linewidth={3}
-          />
-        </lineSegments>
-      )}
+      {/* Live Dashed Crease Preview Line (In-Place Dynamic Draw Range) */}
+      <lineSegments ref={previewLineRef} geometry={previewLineGeoRef.current!} raycast={() => null}>
+        <lineDashedMaterial
+          color={previewCrease?.assignment === 'M' ? '#ef4444' : '#3b82f6'}
+          dashSize={0.02}
+          gapSize={0.015}
+          linewidth={3}
+        />
+      </lineSegments>
     </group>
   );
 };
@@ -641,16 +773,16 @@ const TableSurface: React.FC<{ paperThickness?: number }> = ({ paperThickness = 
   return (
     <group position={[0, 0, 0]}>
       {/* Subtle tabletop grid */}
-      <gridHelper args={[3, 30, '#94a3b8', '#e2e8f0']} position={[0, -0.0005, 0]} />
+      <gridHelper args={[3, 30, '#94a3b8', '#e2e8f0']} position={[0, -0.0005, 0]} raycast={() => null} />
 
       {/* Tabletop receiver plane */}
-      <mesh position={[0, -0.001, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow>
+      <mesh position={[0, -0.001, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow raycast={() => null}>
         <planeGeometry args={[4, 4]} />
         <meshStandardMaterial color="#f8fafc" roughness={0.85} metalness={0.05} />
       </mesh>
 
       {/* Soft Contact Shadow beneath paper sheet */}
-      <mesh position={[0, -0.0002, 0]} rotation={[-Math.PI / 2, 0, 0]}>
+      <mesh position={[0, -0.0002, 0]} rotation={[-Math.PI / 2, 0, 0]} raycast={() => null}>
         <planeGeometry args={[1.3, 1.3]} />
         <meshBasicMaterial
           color="#0f172a"

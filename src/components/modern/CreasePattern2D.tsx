@@ -7,6 +7,11 @@ interface CreasePattern2DProps {
 }
 
 export const CreasePattern2D: React.FC<CreasePattern2DProps> = React.memo(({ fold, className = '' }) => {
+  if (typeof window !== 'undefined') {
+    const prof = ((window as any).__ORIGAMI_PROFILING__ = (window as any).__ORIGAMI_PROFILING__ || {});
+    prof.creasePatternRenderCount = (prof.creasePatternRenderCount || 0) + 1;
+  }
+
   const { bounds, elements } = useMemo(() => {
     if (!fold || !fold.vertices_coords || fold.vertices_coords.length === 0) {
       return {

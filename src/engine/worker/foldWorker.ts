@@ -178,7 +178,9 @@ function runPhysicsTick() {
       iterationsPerTick: 20,
       tickDurationMs,
       stepDurationMs,
-      postTimestamp: now,
+      postTimestamp: (typeof performance !== 'undefined' && performance.timeOrigin)
+        ? (performance.timeOrigin + now)
+        : Date.now(),
       timeBetweenPostsMs,
     };
 
