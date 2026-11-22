@@ -18,6 +18,7 @@ export type WorkerRequest =
         muKinetic?: number;
         bendingCompliance?: number;
         substeps?: number;
+      enableSelfCollision?: boolean;
       };
     }
   | {
@@ -41,6 +42,7 @@ export type WorkerRequest =
       muKinetic?: number;
       bendingCompliance?: number;
       substeps?: number;
+      enableSelfCollision?: boolean;
     }
   | {
       type: 'SEED_FROM_FLAT';

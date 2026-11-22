@@ -110,6 +110,7 @@ export class OrigamiWorkerClient {
       muKinetic?: number;
       bendingCompliance?: number;
       substeps?: number;
+      enableSelfCollision?: boolean;
     }
   ): void {
     this.postMessage({
@@ -130,6 +131,7 @@ export class OrigamiWorkerClient {
     muKinetic?: number;
     bendingCompliance?: number;
     substeps?: number;
+      enableSelfCollision?: boolean;
   }): void {
     this.postMessage({
       type: 'SET_PHYSICS_PARAMS',

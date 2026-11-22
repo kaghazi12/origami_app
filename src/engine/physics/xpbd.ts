@@ -5,7 +5,7 @@ import { FoldSolver, SolveResult, BarycentricPoint, BarycentricAttachment } from
 import { assertFinite, isMeshFinite } from './validation';
 import {
   SpatialHash,
-  generateSelfContacts,
+  SelfContactGenerator,
   solveContactsXPBD,
   ContactData,
   countMeshIntersections,
@@ -87,6 +87,8 @@ export class XPBDSolver implements FoldSolver {
   enableSelfCollision: boolean;
   private spatialHash: SpatialHash;
   private selfContacts: ContactData[] = [];
+  private selfCollisionMargin: number;
+  private contactGen = new SelfContactGenerator();
 
   // Flattened constraint topology arrays for cache-friendly execution
   private numBars: number;
@@ -153,8 +155,12 @@ export class XPBDSolver implements FoldSolver {
     // Phase 9: Self-collision via XPBD
     this.enableSelfCollision = options.enableSelfCollision ?? false;
     const margin = options.selfCollisionMargin ?? Math.max(0.05, this.paperThickness * 2);
+    this.selfCollisionMargin = margin;
     this.spatialHash = new SpatialHash(margin);
-    this.spatialHash.initTopology(this.mesh.indices, this.mesh.numTriangles, this.mesh.uvs);
+    // Exclude only triangles sharing a vertex. The old rest-UV distance filter (1.4 edge lengths)
+    // excluded exactly the pairs that meet when the sheet folds over a crease.
+    this.spatialHash.initTopology(this.mesh.indices, this.mesh.numTriangles);
+    this.contactGen.init(this.mesh.indices, this.mesh.numTriangles, this.mesh.numVertices);
 
     this.posStar = new Float64Array(numV * 3);
     this.forcesBuffer = new Float64Array(numV * 3);
@@ -278,12 +284,15 @@ export class XPBDSolver implements FoldSolver {
   setSelfCollision(enable: boolean, margin?: number): void {
     this.enableSelfCollision = enable;
     if (margin !== undefined) {
+      this.selfCollisionMargin = margin;
       this.spatialHash.setCellSize(margin);
     }
   }
 
   checkSelfIntersections(): { intersectionCount: number; intersectingPairs: [number, number][] } {
-    return countMeshIntersections(this.mesh.positions, this.mesh.indices, this.mesh.numTriangles, this.mesh.uvs);
+    // Strict: only triangles sharing a vertex are exempt. (Passing UVs would also exempt every pair
+    // within ~1.4 rest edge lengths, hiding interpenetration right next to folded creases.)
+    return countMeshIntersections(this.mesh.positions, this.mesh.indices, this.mesh.numTriangles);
   }
 
   setBarycentricPins(pins: BarycentricAttachment[]): void {
@@ -318,77 +327,103 @@ export class XPBDSolver implements FoldSolver {
   }
 
   private projectBarycentric(posStar: Float64Array | Float32Array, hSq: number): void {
-    const invMass = this.invMass;
     for (let pi = 0; pi < this.barycentricPins.length; pi++) {
       const pin = this.barycentricPins[pi];
-      const pt = pin.point;
-      const v0 = pt.v0, v1 = pt.v1, v2 = pt.v2;
-      const w0 = pt.w0, w1 = pt.w1, w2 = pt.w2;
-      const im0 = invMass[v0], im1 = invMass[v1], im2 = invMass[v2];
-      const wEff = w0 * w0 * im0 + w1 * w1 * im1 + w2 * w2 * im2;
-      if (wEff < 1e-12) continue;
-
-      const p0 = v0 * 3, p1 = v1 * 3, p2 = v2 * 3;
-      const curX = w0 * posStar[p0 + 0] + w1 * posStar[p1 + 0] + w2 * posStar[p2 + 0];
-      const curY = w0 * posStar[p0 + 1] + w1 * posStar[p1 + 1] + w2 * posStar[p2 + 1];
-      const curZ = w0 * posStar[p0 + 2] + w1 * posStar[p1 + 2] + w2 * posStar[p2 + 2];
-
-      const cx = curX - pin.targetPos[0];
-      const cy = curY - pin.targetPos[1];
-      const cz = curZ - pin.targetPos[2];
-
-      const alphaTilde = (pin.compliance ?? 0.0) / hSq;
-      const denom = 1.0 + alphaTilde;
-      const dLambdaX = -cx / denom;
-      const dLambdaY = -cy / denom;
-      const dLambdaZ = -cz / denom;
-
-      posStar[p0 + 0] += dLambdaX;
-      posStar[p0 + 1] += dLambdaY;
-      posStar[p0 + 2] += dLambdaZ;
-
-      posStar[p1 + 0] += dLambdaX;
-      posStar[p1 + 1] += dLambdaY;
-      posStar[p1 + 2] += dLambdaZ;
-
-      posStar[p2 + 0] += dLambdaX;
-      posStar[p2 + 1] += dLambdaY;
-      posStar[p2 + 2] += dLambdaZ;
+      this.projectAttachment(posStar, pin.point, pin.targetPos, pin.compliance ?? 0.0, hSq);
     }
-
     if (this.barycentricDrag) {
       const drag = this.barycentricDrag;
-      const target = this.effectiveDragTarget ?? drag.targetPos;
-      const pt = drag.point;
-      const v0 = pt.v0, v1 = pt.v1, v2 = pt.v2;
-      const w0 = pt.w0, w1 = pt.w1, w2 = pt.w2;
+      this.projectAttachment(posStar, drag.point, this.effectiveDragTarget ?? drag.targetPos, drag.compliance ?? 0.0, hSq);
+    }
+  }
 
-      const p0 = v0 * 3, p1 = v1 * 3, p2 = v2 * 3;
-      const curX = w0 * posStar[p0 + 0] + w1 * posStar[p1 + 0] + w2 * posStar[p2 + 0];
-      const curY = w0 * posStar[p0 + 1] + w1 * posStar[p1 + 1] + w2 * posStar[p2 + 1];
-      const curZ = w0 * posStar[p0 + 2] + w1 * posStar[p1 + 2] + w2 * posStar[p2 + 2];
+  /**
+   * XPBD attachment of a barycentric surface point to a world target.
+   * Correction is distributed by w_i * invMass_i (standard XPBD), so fixed vertices are never moved
+   * and the point lands exactly on target when compliance is 0.
+   */
+  private projectAttachment(
+    posStar: Float64Array | Float32Array,
+    pt: BarycentricAttachment['point'],
+    target: ArrayLike<number>,
+    compliance: number,
+    hSq: number
+  ): void {
+    const invMass = this.invMass;
+    const v0 = pt.v0, v1 = pt.v1, v2 = pt.v2;
+    const w0 = pt.w0, w1 = pt.w1, w2 = pt.w2;
+    const im0 = invMass[v0], im1 = invMass[v1], im2 = invMass[v2];
+    const wEff = w0 * w0 * im0 + w1 * w1 * im1 + w2 * w2 * im2;
+    if (wEff < 1e-12) return;
 
-      const cx = curX - target[0];
-      const cy = curY - target[1];
-      const cz = curZ - target[2];
+    const p0 = v0 * 3, p1 = v1 * 3, p2 = v2 * 3;
+    const cx = w0 * posStar[p0 + 0] + w1 * posStar[p1 + 0] + w2 * posStar[p2 + 0] - target[0];
+    const cy = w0 * posStar[p0 + 1] + w1 * posStar[p1 + 1] + w2 * posStar[p2 + 1] - target[1];
+    const cz = w0 * posStar[p0 + 2] + w1 * posStar[p1 + 2] + w2 * posStar[p2 + 2] - target[2];
 
-      const alphaTilde = (drag.compliance ?? 0.0) / hSq;
-      const denom = 1.0 + alphaTilde;
-      const dLambdaX = -cx / denom;
-      const dLambdaY = -cy / denom;
-      const dLambdaZ = -cz / denom;
+    // Same effective point stiffness as before (dp = -C / (1 + alphaTilde)), distributed by mass
+    const s = -1.0 / (wEff * (1.0 + compliance / hSq));
+    const k0 = s * w0 * im0, k1 = s * w1 * im1, k2 = s * w2 * im2;
+    posStar[p0 + 0] += k0 * cx; posStar[p0 + 1] += k0 * cy; posStar[p0 + 2] += k0 * cz;
+    posStar[p1 + 0] += k1 * cx; posStar[p1 + 1] += k1 * cy; posStar[p1 + 2] += k1 * cz;
+    posStar[p2 + 0] += k2 * cx; posStar[p2 + 1] += k2 * cy; posStar[p2 + 2] += k2 * cz;
+  }
 
-      posStar[p0 + 0] += dLambdaX;
-      posStar[p0 + 1] += dLambdaY;
-      posStar[p0 + 2] += dLambdaZ;
+  /** Max allowed bar strain at the end of a substep before extra bar-only sweeps kick in. */
+  strainLimit = 0.01;
+  strainLimitSweeps = 30;
 
-      posStar[p1 + 0] += dLambdaX;
-      posStar[p1 + 1] += dLambdaY;
-      posStar[p1 + 2] += dLambdaZ;
+  /** Hard table non-penetration (contact plane at z = tableZ + paperThickness / 2). */
+  private enforceTable(posStar: Float64Array): void {
+    if (!this.enableTable) return;
+    const zContact = this.tableZ + this.paperThickness * 0.5;
+    const invMass = this.invMass;
+    for (let i = 0, n = this.mesh.numVertices; i < n; i++) {
+      if (invMass[i] > 0.0 && posStar[i * 3 + 2] < zContact) posStar[i * 3 + 2] = zContact;
+    }
+  }
 
-      posStar[p2 + 0] += dLambdaX;
-      posStar[p2 + 1] += dLambdaY;
-      posStar[p2 + 2] += dLambdaZ;
+  /**
+   * Bar-only sweeps (interleaved with the table plane) until every bar is within `strainLimit`.
+   * Always finishes with table enforcement, replacing the old post-bar table pass.
+   */
+  private limitStrain(posStar: Float64Array): void {
+    const lim = this.strainLimit;
+    if (!(lim > 0)) { this.enforceTable(posStar); return; }
+    const invMass = this.invMass;
+    const barV0 = this.barV0, barV1 = this.barV1, rest = this.barRestLen;
+    let prevWorst = Infinity;
+    for (let sweep = 0; sweep < this.strainLimitSweeps; sweep++) {
+      let worst = 0;
+      for (let b = 0; b < this.numBars; b++) {
+        const v0 = barV0[b], v1 = barV1[b];
+        const w0 = invMass[v0], w1 = invMass[v1];
+        const wSum = w0 + w1;
+        if (wSum === 0.0) continue;
+        const p0 = v0 * 3, p1 = v1 * 3;
+        const dx = posStar[p0] - posStar[p1], dy = posStar[p0 + 1] - posStar[p1 + 1], dz = posStar[p0 + 2] - posStar[p1 + 2];
+        const dist = Math.sqrt(dx * dx + dy * dy + dz * dz);
+        const L0 = rest[b];
+        if (dist < 1e-12 || L0 < 1e-12) continue;
+        const strain = Math.abs(dist - L0) / L0;
+        if (strain > worst) worst = strain;
+        if (sweep > 0 || strain > lim) {
+          const corr = -(dist - L0) / (wSum * dist);
+          const f0 = w0 * corr, f1 = w1 * corr;
+          posStar[p0] += dx * f0; posStar[p0 + 1] += dy * f0; posStar[p0 + 2] += dz * f0;
+          posStar[p1] -= dx * f1; posStar[p1 + 1] -= dy * f1; posStar[p1 + 2] -= dz * f1;
+        }
+      }
+      // Contacts and table are re-enforced inside the sweeps; otherwise bar-only sweeps can drag
+      // layers back through each other (and a crossed layer stays crossed in the next substep).
+      if (this.enableSelfCollision && this.selfContacts.length > 0) {
+        solveContactsXPBD(this.selfContacts, posStar, this.mesh.positions, invMass, this.muStatic, this.muKinetic);
+      }
+      this.enforceTable(posStar);
+      if (worst <= lim) return;
+      // Stalled (e.g. contacts and bars balanced in a thick stack): further sweeps are wasted work
+      if (worst > 0.95 * prevWorst) return;
+      prevWorst = worst;
     }
   }
 
@@ -483,6 +518,25 @@ export class XPBDSolver implements FoldSolver {
           posStar[i3 + 1] = pos[i3 + 1] + h * vel[i3 + 1];
           posStar[i3 + 2] = pos[i3 + 2] + h * vel[i3 + 2] - gAcc * hSq;
         }
+      }
+
+      // Self-collision detection, once per substep, on the committed (non-penetrating) positions.
+      // The proximity radius is padded by this substep's predicted motion so that features which
+      // will meet during the step are caught before they cross (prevents tunnelling).
+      if (this.enableSelfCollision) {
+        let maxDispSq = 0;
+        for (let i = 0; i < numV * 3; i += 3) {
+          const dx = posStar[i] - pos[i], dy = posStar[i + 1] - pos[i + 1], dz = posStar[i + 2] - pos[i + 2];
+          const d2 = dx * dx + dy * dy + dz * dz;
+          if (d2 > maxDispSq) maxDispSq = d2;
+        }
+        const t = this.paperThickness;
+        const radius = Math.min(this.selfCollisionMargin, Math.max(2 * t, t + 2 * Math.sqrt(maxDispSq)));
+        this.spatialHash.build(pos, this.mesh.indices, this.mesh.numTriangles, radius);
+        const pairs = this.spatialHash.queryCandidatePairs();
+        this.contactGen.generate(pairs, pos, t, radius, this.selfContacts);
+      } else if (this.selfContacts.length > 0) {
+        this.selfContacts.length = 0;
       }
 
       // Reset Lagrange multipliers for this substep
@@ -649,22 +703,9 @@ export class XPBDSolver implements FoldSolver {
         }
 
         // --- C. Phase 9: Self-Collision XPBD Constraint (Vertex-Triangle & Edge-Edge) ---
-        if (this.enableSelfCollision) {
-          this.spatialHash.build(posStar, this.mesh.indices, this.mesh.numTriangles, this.paperThickness);
-          const pairs = this.spatialHash.queryCandidatePairs();
-          if (pairs.length > 0) {
-            generateSelfContacts(pairs, posStar, this.mesh.indices, this.paperThickness, this.selfContacts);
-            if (this.selfContacts.length > 0) {
-              solveContactsXPBD(
-                this.selfContacts,
-                posStar,
-                pos,
-                invMass,
-                this.muStatic,
-                this.muKinetic
-              );
-            }
-          }
+        // Contacts were detected once for this substep from the committed state (see below).
+        if (this.enableSelfCollision && this.selfContacts.length > 0) {
+          solveContactsXPBD(this.selfContacts, posStar, pos, invMass, this.muStatic, this.muKinetic);
         }
 
         // --- D. Distance Constraints (Axial Bars - exact inextensibility alpha = 0) ---
@@ -710,15 +751,12 @@ export class XPBDSolver implements FoldSolver {
         this.projectBarycentric(posStar, hSq);
       }
 
-      // --- D. Post-bar table contact enforcement (contact plane is at z = tableZ + paperThickness / 2) ---
-      if (this.enableTable) {
-        const zContact = this.tableZ + this.paperThickness * 0.5;
-        for (let i = 0; i < numV; i++) {
-          if (invMass[i] > 0.0 && posStar[i * 3 + 2] < zContact) {
-            posStar[i * 3 + 2] = zContact;
-          }
-        }
-      }
+      // --- Strain limiting ---
+      // Attachments are projected after the bars, so an unreachable pin/drag combination (or a
+      // violent collapse) can leave bars stretched far past their rest length. Unchecked, that
+      // stretch becomes velocity and the sheet explodes. When any bar exceeds the limit, run extra
+      // bar-only sweeps; no cost when the sheet is already near-inextensible.
+      this.limitStrain(posStar);
 
 
       // 3. Update velocities and commit positions

@@ -112,6 +112,7 @@ export const ModernOrigamiApp: React.FC = () => {
   const [muKinetic, setMuKinetic] = useState<number>(0.4);
   const [paperStiffnessPreset, setPaperStiffnessPreset] = useState<number>(50); // 0 (tissue) to 100 (card)
   const [substepsPerFrame, setSubstepsPerFrame] = useState<number>(10);
+  const [enableSelfCollision, setEnableSelfCollision] = useState<boolean>(true);
 
   // Phase 7: Pivot-and-drag interaction state (barycentric points + tool mode)
   const [activeTool, setActiveTool] = useState<'pivot' | 'drag'>('drag');
@@ -285,6 +286,7 @@ export const ModernOrigamiApp: React.FC = () => {
         muKinetic,
         bendingCompliance,
         substeps: substepsPerFrame,
+        enableSelfCollision,
       }
     );
 
@@ -321,9 +323,10 @@ export const ModernOrigamiApp: React.FC = () => {
         muKinetic,
         bendingCompliance,
         substeps: substepsPerFrame,
+        enableSelfCollision,
       }
     );
-  }, [axialStiffness, creaseStiffness, facetStiffness, meshDensity, paperStiffnessPreset, enableTable, paperThickness, enableGravity, gravity, muStatic, muKinetic, substepsPerFrame]);
+  }, [axialStiffness, creaseStiffness, facetStiffness, meshDensity, paperStiffnessPreset, enableTable, paperThickness, enableGravity, gravity, muStatic, muKinetic, substepsPerFrame, enableSelfCollision]);
 
   // Handle physics parameter updates to worker
   const updatePhysicsParams = (params: {
@@ -335,6 +338,7 @@ export const ModernOrigamiApp: React.FC = () => {
     muKinetic?: number;
     paperStiffnessPreset?: number;
     substepsPerFrame?: number;
+    enableSelfCollision?: boolean;
   }) => {
     if (params.enableTable !== undefined) setEnableTable(params.enableTable);
     if (params.paperThickness !== undefined) setPaperThickness(params.paperThickness);
@@ -344,6 +348,7 @@ export const ModernOrigamiApp: React.FC = () => {
     if (params.muKinetic !== undefined) setMuKinetic(params.muKinetic);
     if (params.paperStiffnessPreset !== undefined) setPaperStiffnessPreset(params.paperStiffnessPreset);
     if (params.substepsPerFrame !== undefined) setSubstepsPerFrame(params.substepsPerFrame);
+    if (params.enableSelfCollision !== undefined) setEnableSelfCollision(params.enableSelfCollision);
 
     const preset = params.paperStiffnessPreset ?? paperStiffnessPreset;
     const compliance = 0.05 * Math.pow(10, -4 * (preset / 100));
@@ -357,6 +362,7 @@ export const ModernOrigamiApp: React.FC = () => {
       muKinetic: params.muKinetic ?? muKinetic,
       bendingCompliance: compliance,
       substeps: params.substepsPerFrame ?? substepsPerFrame,
+      enableSelfCollision: params.enableSelfCollision ?? enableSelfCollision,
     });
   };
 
@@ -1171,6 +1177,17 @@ export const ModernOrigamiApp: React.FC = () => {
             <span>Table Contact (z &ge; thickness/2)</span>
           </label>
 
+          {/* Self-collision Toggle */}
+          <label className="flex items-center space-x-1.5 cursor-pointer font-medium text-gray-700">
+            <input
+              type="checkbox"
+              checked={enableSelfCollision}
+              onChange={(e) => updatePhysicsParams({ enableSelfCollision: e.target.checked })}
+              className="rounded text-indigo-600 focus:ring-indigo-500"
+            />
+            <span>Self-Collision</span>
+          </label>
+
           {/* Thickness */}
           <div className="flex items-center space-x-1.5">
             <span className="text-gray-500">Thickness:</span>
@@ -1298,7 +1315,7 @@ export const ModernOrigamiApp: React.FC = () => {
         </div>
 
         <div className="text-gray-400 text-[11px] italic">
-          Note: Paper layers will interpenetrate until collision phase is added.
+          Self-collision keeps layers at least one paper thickness apart.
         </div>
       </div>
     </div>

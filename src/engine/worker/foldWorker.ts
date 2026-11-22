@@ -270,6 +270,7 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
           muKinetic: sOpts.muKinetic ?? 0.4,
           bendingCompliance: sOpts.bendingCompliance,
           enablePlasticity: true,
+          enableSelfCollision: sOpts.enableSelfCollision ?? false,
         });
 
         // Seed microscopic out-of-plane perturbation at center
@@ -352,6 +353,12 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
         if (req.substeps !== undefined) {
           solver.substeps = req.substeps;
         }
+        if (req.enableSelfCollision !== undefined) {
+          solver.setSelfCollision(req.enableSelfCollision);
+        }
+        // Keep the latest params so solvers rebuilt by COMMIT_CREASE / UNDO / REDO inherit them
+        currentPhysicsParams = { ...currentPhysicsParams, ...req };
+        delete currentPhysicsParams.type;
         wakeFromSleep();
         break;
       }
@@ -488,6 +495,7 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
           muKinetic: sOpts.muKinetic ?? 0.4,
           bendingCompliance: sOpts.bendingCompliance,
           enablePlasticity: true,
+          enableSelfCollision: sOpts.enableSelfCollision ?? false,
         });
 
         isAwaitingBuffer = false;
@@ -529,6 +537,7 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
             muKinetic: sOpts.muKinetic ?? 0.4,
             bendingCompliance: sOpts.bendingCompliance,
             enablePlasticity: true,
+            enableSelfCollision: sOpts.enableSelfCollision ?? false,
           });
 
           isAwaitingBuffer = false;
@@ -563,6 +572,7 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
             muKinetic: sOpts.muKinetic ?? 0.4,
             bendingCompliance: sOpts.bendingCompliance,
             enablePlasticity: true,
+            enableSelfCollision: sOpts.enableSelfCollision ?? false,
           });
 
           isAwaitingBuffer = false;
