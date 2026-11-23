@@ -171,11 +171,18 @@ export function withLayerGap(flatVertices: Float64Array, vertexRanks: Float64Arr
  * and dip along valley creases while they collapse. The end state is exact.
  */
 export class ExactFoldPlayer {
-  readonly folded: Float64Array;
+  folded: Float64Array;
   private readonly flat: Float64Array;
   private readonly lift: Float64Array;
+  /** Folded positions without layer offsets (centred), and stacking height per vertex. */
+  private base: Float64Array | null = null;
+  private ranks: Float64Array | null = null;
 
-  constructor(cp: CreasePatternInput, folded: Float64Array) {
+  /**
+   * folded: folded positions (with any layer offsets already applied). Pass ranks to be able to
+   * change the spacing between layers later with setLayerGap (folded must then have gap 0).
+   */
+  constructor(cp: CreasePatternInput, folded: Float64Array, ranks?: Float64Array) {
     const n = cp.vertices_coords.length;
     this.flat = new Float64Array(n * 3);
     cp.vertices_coords.forEach((p, i) => { this.flat[i * 3] = p[0]; this.flat[i * 3 + 1] = p[1]; });
@@ -192,6 +199,10 @@ export class ExactFoldPlayer {
     const [sx, sy] = box(this.flat);
     this.folded = Float64Array.from(folded);
     for (let i = 0; i < n; i++) { this.folded[i * 3] += sx - fx; this.folded[i * 3 + 1] += sy - fy; }
+    if (ranks) {
+      this.base = Float64Array.from(this.folded);
+      this.ranks = ranks;
+    }
     // mountain/valley balance at each vertex and the local crease spacing
     const m = new Float64Array(n), v = new Float64Array(n), shortest = new Float64Array(n).fill(Infinity);
     cp.edges_vertices.forEach(([a, b], e) => {
@@ -211,16 +222,55 @@ export class ExactFoldPlayer {
     }
   }
 
+  /** Relaxed folded poses (physics opened slightly from the exact form), alpha descending from 1. */
+  private relaxAlphas: number[] = [];
+  private relaxPoses: Float64Array[] = [];
+
+  /**
+   * Keyframes for the top of the fold range: alphas[0] must be 1 (the exact folded form) and the
+   * rest descending, e.g. [1, 0.97, ..., 0.85]. Between the lowest keyframe and the flat sheet
+   * the computed transition is used.
+   */
+  setRelaxedKeyframes(alphas: number[], poses: Float64Array[]): void {
+    this.relaxAlphas = alphas.slice();
+    this.relaxPoses = poses.map((p) => Float64Array.from(p));
+  }
+
+  /** Lowest fold progress covered by relaxed keyframes (1 when there are none). */
+  get relaxedFrom(): number {
+    return this.relaxAlphas.length > 1 ? this.relaxAlphas[this.relaxAlphas.length - 1] : 1;
+  }
+
+  /** Space between stacked layers in the folded form (paper units). Needs ranks in the constructor. */
+  setLayerGap(gap: number): void {
+    if (!this.base || !this.ranks) return;
+    this.folded = withLayerGap(this.base, this.ranks, gap);
+  }
+
   /** Vertex positions at fold progress alpha (0..1), written into out (3 per vertex). */
   pose(alpha: number, out: Float64Array): void {
-    const s = Math.min(1, Math.max(0, alpha));
+    const a = Math.min(1, Math.max(0, alpha));
+    const ks = this.relaxAlphas;
+    if (ks.length > 1 && a >= this.relaxedFrom) {
+      // between two relaxed keyframes (real paper shapes from the physics relaxation)
+      let i = 0;
+      while (i < ks.length - 2 && a < ks[i + 1]) i++;
+      const hi = ks[i], lo = ks[i + 1];
+      const f = hi === lo ? 0 : (hi - a) / (hi - lo);
+      const A = this.relaxPoses[i], B = this.relaxPoses[i + 1];
+      for (let k = 0; k < out.length; k++) out[k] = A[k] + (B[k] - A[k]) * f;
+      return;
+    }
+    // computed transition from the flat sheet to the lowest relaxed keyframe (or the folded form)
+    const end = ks.length > 1 ? this.relaxPoses[this.relaxPoses.length - 1] : this.folded;
+    const s = ks.length > 1 ? a / this.relaxedFrom : a;
     const bump = Math.sin(Math.PI * s);
     const n = this.lift.length;
     for (let i = 0; i < n; i++) {
       const k = i * 3;
-      out[k] = this.flat[k] + (this.folded[k] - this.flat[k]) * s;
-      out[k + 1] = this.flat[k + 1] + (this.folded[k + 1] - this.flat[k + 1]) * s;
-      out[k + 2] = this.flat[k + 2] + (this.folded[k + 2] - this.flat[k + 2]) * s + this.lift[i] * bump;
+      out[k] = this.flat[k] + (end[k] - this.flat[k]) * s;
+      out[k + 1] = this.flat[k + 1] + (end[k + 1] - this.flat[k + 1]) * s;
+      out[k + 2] = this.flat[k + 2] + (end[k + 2] - this.flat[k + 2]) * s + this.lift[i] * bump;
     }
   }
 }

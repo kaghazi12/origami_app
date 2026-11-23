@@ -104,9 +104,9 @@ export const ModernOrigamiApp: React.FC = () => {
   const [facetStiffness, setFacetStiffness] = useState<number>(200);
 
   // Phase 6: Table contact, Coulomb friction, gravity & paper stiffness
-  const [enableTable, setEnableTable] = useState<boolean>(true);
+  const [enableTable, setEnableTable] = useState<boolean>(false);
   const [paperThickness, setPaperThickness] = useState<number>(0.002);
-  const [enableGravity, setEnableGravity] = useState<boolean>(true);
+  const [enableGravity, setEnableGravity] = useState<boolean>(false);
   const [gravity, setGravity] = useState<number>(1.0);
   const [muStatic, setMuStatic] = useState<number>(0.5);
   const [muKinetic, setMuKinetic] = useState<number>(0.4);
@@ -115,6 +115,11 @@ export const ModernOrigamiApp: React.FC = () => {
   const [enableSelfCollision, setEnableSelfCollision] = useState<boolean>(true);
   // Complex crease patterns: fold exactly instead of simulating ('auto' = when the pattern is complex)
   const [exactFoldMode, setExactFoldMode] = useState<'auto' | 'on' | 'off'>('auto');
+  // The 2D crease pattern is hidden by default so the 3D model gets the full width
+  const [showPattern2D, setShowPattern2D] = useState<boolean>(false);
+  // Frame the camera on the folded model the first time a fold finishes after loading
+  const [fitModelKey, setFitModelKey] = useState(0);
+  const autoFittedRef = useRef(false);
   const exactFoldModeRef = useRef<'auto' | 'on' | 'off'>('auto');
 
   // Phase 7: Pivot-and-drag interaction state (barycentric points + tool mode)
@@ -189,6 +194,7 @@ export const ModernOrigamiApp: React.FC = () => {
     clientRef.current = client;
 
     client.onLoaded((info) => {
+      autoFittedRef.current = false;
       loadedInfoRef.current = info;
       setLoadedInfo(info);
       setPositions(null);
@@ -262,6 +268,11 @@ export const ModernOrigamiApp: React.FC = () => {
 
       // 3. Return the worker's buffer back to worker thread for backpressure & zero-allocation recycling
       client.returnBuffer(frameEvent.positions.buffer);
+    });
+
+    client.onStateChanged(({ alpha: a }) => {
+      setAlpha(a);
+      setIsPlaying(false);
     });
 
     client.onError((err) => {
@@ -625,6 +636,15 @@ export const ModernOrigamiApp: React.FC = () => {
   };
 
   const isConverged = stats?.converged ?? false;
+
+  useEffect(() => {
+    if (autoFittedRef.current || !stats) return;
+    const settled = stats.converged && (stats.targetAlpha ?? 0) >= 0.85 && Math.abs(stats.alpha - (stats.targetAlpha ?? 0)) < 1e-3;
+    if (settled) {
+      autoFittedRef.current = true;
+      setFitModelKey((k) => k + 1);
+    }
+  }, [stats]);
   const resForce = stats?.maxResidualForce ?? 0;
 
   return (
@@ -827,11 +847,13 @@ export const ModernOrigamiApp: React.FC = () => {
       </div>
 
       {/* Main Dual-Viewport Area */}
-      <div className="flex-1 grid grid-cols-1 lg:grid-cols-2 gap-4 p-4 min-h-0 overflow-hidden">
-        {/* Left Viewport: 2D Crease Pattern */}
-        <div className="flex flex-col h-full min-h-[350px]">
-          <CreasePattern2D fold={currentFold} className="h-full" />
-        </div>
+      <div className={`flex-1 grid grid-cols-1 ${showPattern2D ? 'lg:grid-cols-2' : ''} gap-4 p-4 min-h-0 overflow-hidden`}>
+        {/* Left Viewport: 2D Crease Pattern (optional) */}
+        {showPattern2D && (
+          <div className="flex flex-col h-full min-h-[350px]">
+            <CreasePattern2D fold={currentFold} className="h-full" />
+          </div>
+        )}
 
         {/* Right Viewport: 3D Interactive Three.js Canvas */}
         <div
@@ -1028,7 +1050,7 @@ export const ModernOrigamiApp: React.FC = () => {
             uvs={loadedInfo?.uvs ?? null}
             creaseEdges={loadedInfo?.creaseEdges ?? []}
             showCreases={showCreases}
-            showTable={enableTable}
+            showTable={false}
             paperThickness={paperThickness}
             activeTool={activeTool}
             barycentricPin={barycentricPin}
@@ -1042,6 +1064,7 @@ export const ModernOrigamiApp: React.FC = () => {
             onBarycentricDragMove={handleBarycentricDragMove}
             onBarycentricDragEnd={handleBarycentricDragEnd}
             className="h-full w-full"
+            fitModelKey={fitModelKey}
           />
 
           {/* Floating Telemetry Badge on 3D View (standard view) */}
@@ -1191,6 +1214,16 @@ export const ModernOrigamiApp: React.FC = () => {
               className="rounded text-indigo-600 focus:ring-indigo-500"
             />
             <span>Self-Collision</span>
+          </label>
+
+          <label className="flex items-center space-x-1.5 cursor-pointer font-medium text-gray-700">
+            <input
+              type="checkbox"
+              checked={showPattern2D}
+              onChange={(e) => setShowPattern2D(e.target.checked)}
+              className="rounded text-indigo-600 focus:ring-indigo-500"
+            />
+            <span>Show 2D pattern</span>
           </label>
 
           {/* Exact folding for complex crease patterns */}

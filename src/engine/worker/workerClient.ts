@@ -21,12 +21,14 @@ export interface FrameEvent {
 export type LoadedCallback = (info: LoadedMeshInfo) => void;
 export type FrameCallback = (event: FrameEvent) => void;
 export type ErrorCallback = (error: string) => void;
+export type StateChangedCallback = (state: { paused: boolean; alpha: number }) => void;
 
 export class OrigamiWorkerClient {
   private worker: Worker | null = null;
   private onLoadedCb?: LoadedCallback;
   private onFrameCb?: FrameCallback;
   private onErrorCb?: ErrorCallback;
+  private onStateChangedCb?: StateChangedCallback;
   private lastAlphaSentTime = 0;
   private measuredLatencyMs = 0;
 
@@ -61,6 +63,11 @@ export class OrigamiWorkerClient {
     this.onErrorCb = cb;
   }
 
+  /** The worker changed the fold progress itself (e.g. settled before a grab). */
+  onStateChanged(cb: StateChangedCallback): void {
+    this.onStateChangedCb = cb;
+  }
+
   private handleMessage(e: MessageEvent<WorkerResponse>): void {
     const data = e.data;
     switch (data.type) {
@@ -89,6 +96,11 @@ export class OrigamiWorkerClient {
           stats: data.stats,
           latencyMs: this.measuredLatencyMs,
         });
+        break;
+      }
+
+      case 'STATE_CHANGED': {
+        this.onStateChangedCb?.({ paused: data.paused, alpha: data.alpha });
         break;
       }
 

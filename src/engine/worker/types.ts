@@ -27,6 +27,7 @@ export type WorkerRequest =
       type: 'SET_EXACT_FOLD';
       mode: ExactFoldMode;
     }
+
   | {
       type: 'SET_ALPHA';
       alpha: number;

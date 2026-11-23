@@ -167,6 +167,24 @@ const DragHandleMarker: React.FC<{ position: [number, number, number] }> = ({ po
   );
 };
 
+/**
+ * Physics coordinates (paper units, z up) <-> scene coordinates (y up). The loaded sheet is
+ * centred at the scene origin and scaled so its longest side is VIEW_SIZE units, whatever the
+ * FOLD file's own coordinates are. Set once per render by OrigamiModernCanvas.
+ */
+const VIEW_SIZE = 2;
+const VIEW = { cx: 0.5, cy: 0.5, s: VIEW_SIZE, clampZ: false };
+const physToWorld = (x: number, y: number, z: number): [number, number, number] => [
+  (x - VIEW.cx) * VIEW.s,
+  z * VIEW.s,
+  -(y - VIEW.cy) * VIEW.s,
+];
+const worldToPhys = (w: THREE.Vector3, minZ: number): [number, number, number] => [
+  w.x / VIEW.s + VIEW.cx,
+  -w.z / VIEW.s + VIEW.cy,
+  VIEW.clampZ ? Math.max(minZ, w.y / VIEW.s) : w.y / VIEW.s,
+];
+
 const PaperMesh: React.FC<{
   indices: Uint32Array;
   positions: Float32Array;
@@ -229,11 +247,7 @@ const PaperMesh: React.FC<{
     if (!e.face) return;
 
     const hitWorld = e.point;
-    const physPos: [number, number, number] = [
-      hitWorld.x + 0.58,
-      -(hitWorld.z + 0.50),
-      Math.max(paperThickness * 0.5, hitWorld.y),
-    ];
+    const physPos = worldToPhys(hitWorld, paperThickness * 0.5);
 
     const a = e.face.a;
     const b = e.face.b;
@@ -315,9 +329,7 @@ const PaperMesh: React.FC<{
     const targetWorld = new THREE.Vector3();
     if (!ray.intersectPlane(dragPlaneRef.current, targetWorld)) return;
 
-    let newPhysX = targetWorld.x + 0.58;
-    let newPhysY = -(targetWorld.z + 0.50);
-    let newPhysZ = Math.max(paperThickness * 0.5, targetWorld.y);
+    let [newPhysX, newPhysY, newPhysZ] = worldToPhys(targetWorld, paperThickness * 0.5);
 
     // Reach clamp if pin P is active
     if (barycentricPin && activeDragRef.current.point.restU !== undefined && barycentricPin.point.restU !== undefined) {
@@ -334,7 +346,7 @@ const PaperMesh: React.FC<{
         const scale = reach / d;
         newPhysX = pTarget[0] + dx * scale;
         newPhysY = pTarget[1] + dy * scale;
-        newPhysZ = Math.max(paperThickness * 0.5, pTarget[2] + dz * scale);
+        newPhysZ = VIEW.clampZ ? Math.max(paperThickness * 0.5, pTarget[2] + dz * scale) : pTarget[2] + dz * scale;
       }
     }
 
@@ -672,7 +684,11 @@ const PaperMesh: React.FC<{
   }, [previewCrease, updatePreviewGeometry]);
 
   return (
-    <group position={[-0.58, 0, -0.50]} rotation={[-Math.PI / 2, 0, 0]}>
+    <group
+      position={[-VIEW.cx * VIEW.s, 0, VIEW.cy * VIEW.s]}
+      rotation={[-Math.PI / 2, 0, 0]}
+      scale={[VIEW.s, VIEW.s, VIEW.s]}
+    >
       {/* Front Face: crisp origami paper color */}
       <mesh
         geometry={geometry}
@@ -767,6 +783,8 @@ export interface OrigamiModernCanvasProps {
   onDragStart?: (vertexIndex: number) => void;
   onDragMove?: (vertexIndex: number, targetPos: [number, number, number]) => void;
   onDragEnd?: () => void;
+  /** Bump to frame the camera on the model as it is now (e.g. when a fold finishes). */
+  fitModelKey?: number;
 }
 
 const TableSurface: React.FC<{ paperThickness?: number }> = ({ paperThickness = 0.002 }) => {
@@ -795,6 +813,50 @@ const TableSurface: React.FC<{ paperThickness?: number }> = ({ paperThickness = 
   );
 };
 
+/**
+ * Camera framing. On load: frame the whole sheet. When fitModelKey changes (fold finished, or the
+ * user double-clicked): frame the model as it is now, keeping the current viewing direction.
+ */
+const CameraFit: React.FC<{
+  loadKey: unknown;
+  fitModelKey: number;
+  positions: Float32Array | null;
+  controlsRef: React.MutableRefObject<any>;
+}> = ({ loadKey, fitModelKey, positions, controlsRef }) => {
+  const { camera, size } = useThree();
+  const frame = (center: THREE.Vector3, radius: number, dir: THREE.Vector3) => {
+    const persp = camera as THREE.PerspectiveCamera;
+    const fov = ((persp.fov ?? 45) * Math.PI) / 180;
+    const aspect = size.width / Math.max(1, size.height);
+    const halfAngle = Math.min(fov, 2 * Math.atan(Math.tan(fov / 2) * aspect)) / 2;
+    const dist = Math.max(0.25, radius / Math.sin(halfAngle));
+    camera.position.copy(center).add(dir.clone().normalize().multiplyScalar(dist));
+    camera.lookAt(center);
+    if (controlsRef.current) {
+      controlsRef.current.target.copy(center);
+      controlsRef.current.update();
+    }
+  };
+  useEffect(() => {
+    frame(new THREE.Vector3(0, 0, 0), VIEW_SIZE * 0.62, new THREE.Vector3(0, 0.82, 0.57));
+  }, [loadKey]);
+  useEffect(() => {
+    if (fitModelKey === 0 || !positions || positions.length < 3) return;
+    const box = new THREE.Box3();
+    const p = new THREE.Vector3();
+    for (let i = 0; i < positions.length; i += 3) {
+      const w = physToWorld(positions[i], positions[i + 1], positions[i + 2]);
+      box.expandByPoint(p.set(w[0], w[1], w[2]));
+    }
+    const sphere = box.getBoundingSphere(new THREE.Sphere());
+    const target = controlsRef.current?.target ?? new THREE.Vector3();
+    const dir = camera.position.clone().sub(target);
+    if (dir.lengthSq() < 1e-9) dir.set(0, 0.82, 0.57);
+    frame(sphere.center, Math.max(sphere.radius * 1.15, 0.05), dir);
+  }, [fitModelKey]);
+  return null;
+};
+
 export const OrigamiModernCanvas: React.FC<OrigamiModernCanvasProps> = ({
   indices,
   positions,
@@ -804,7 +866,7 @@ export const OrigamiModernCanvas: React.FC<OrigamiModernCanvasProps> = ({
   frontColor = '#FCFBF7',
   backColor = '#EA580C',
   className = '',
-  showTable = true,
+  showTable = false,
   paperThickness = 0.002,
   activeTool = 'drag',
   barycentricPin = null,
@@ -823,9 +885,25 @@ export const OrigamiModernCanvas: React.FC<OrigamiModernCanvasProps> = ({
   onDragStart,
   onDragMove,
   onDragEnd,
+  fitModelKey = 0,
 }) => {
   const orbitRef = useRef<any>(null);
+  const [dblClickFit, setDblClickFit] = useState(0);
   const [isDragging, setIsDragging] = useState(false);
+
+  const sheetBounds = useMemo(() => {
+    if (!uvs || uvs.length < 2) return { cx: 0.5, cy: 0.5, size: 1 };
+    let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
+    for (let i = 0; i < uvs.length; i += 2) {
+      x0 = Math.min(x0, uvs[i]); x1 = Math.max(x1, uvs[i]);
+      y0 = Math.min(y0, uvs[i + 1]); y1 = Math.max(y1, uvs[i + 1]);
+    }
+    return { cx: (x0 + x1) / 2, cy: (y0 + y1) / 2, size: Math.max(x1 - x0, y1 - y0) || 1 };
+  }, [uvs]);
+  VIEW.cx = sheetBounds.cx;
+  VIEW.cy = sheetBounds.cy;
+  VIEW.s = VIEW_SIZE / sheetBounds.size;
+  VIEW.clampZ = showTable;
 
   // Compute 3D world position for barycentric pin marker
   const pinWorldPos = useMemo<[number, number, number] | null>(() => {
@@ -835,27 +913,21 @@ export const OrigamiModernCanvas: React.FC<OrigamiModernCanvasProps> = ({
     const curX = pt.w0 * positions[p0 + 0] + pt.w1 * positions[p1 + 0] + pt.w2 * positions[p2 + 0];
     const curY = pt.w0 * positions[p0 + 1] + pt.w1 * positions[p1 + 1] + pt.w2 * positions[p2 + 1];
     const curZ = pt.w0 * positions[p0 + 2] + pt.w1 * positions[p1 + 2] + pt.w2 * positions[p2 + 2];
-    return [curX - 0.58, curZ, -curY - 0.50];
+    return physToWorld(curX, curY, curZ);
   }, [barycentricPin, positions]);
 
   // Compute 3D world position for barycentric drag marker
+  // The app moves the drag target in place (no re-render per pointer move), so re-read it on every
+  // frame (positions change each frame) instead of memoising on the drag object.
   const dragWorldPos = useMemo<[number, number, number] | null>(() => {
     if (!barycentricDrag) return null;
-    return [
-      barycentricDrag.targetPos[0] - 0.58,
-      barycentricDrag.targetPos[2],
-      -barycentricDrag.targetPos[1] - 0.50,
-    ];
-  }, [barycentricDrag]);
+    return physToWorld(barycentricDrag.targetPos[0], barycentricDrag.targetPos[1], barycentricDrag.targetPos[2]);
+  }, [barycentricDrag, barycentricDrag?.targetPos, positions]);
 
   // Reach circle center on the table
   const reachCenter = useMemo<[number, number, number] | null>(() => {
     if (!barycentricPin) return null;
-    return [
-      barycentricPin.targetPos[0] - 0.58,
-      0.0005,
-      -barycentricPin.targetPos[1] - 0.50,
-    ];
+    return physToWorld(barycentricPin.targetPos[0], barycentricPin.targetPos[1], 0.0005);
   }, [barycentricPin]);
 
   const cursorClass =
@@ -868,7 +940,8 @@ export const OrigamiModernCanvas: React.FC<OrigamiModernCanvasProps> = ({
   return (
     <div className={`relative w-full h-full min-h-[300px] bg-gradient-to-b from-gray-100 to-gray-200 rounded-lg overflow-hidden border border-gray-300 ${cursorClass} ${className}`}>
       <Canvas
-        camera={{ position: [0.0, 1.4, 1.2], fov: 45 }}
+        onDoubleClick={() => setDblClickFit((k) => k + 1)}
+        camera={{ position: [0.0, 2.8, 2.0], fov: 45, near: 0.01, far: 100 }}
         gl={{ antialias: true, alpha: true }}
       >
         <ThreeProfiler />
@@ -877,6 +950,7 @@ export const OrigamiModernCanvas: React.FC<OrigamiModernCanvasProps> = ({
         <directionalLight position={[-3, 4, -2]} intensity={0.4} />
 
         {showTable && <TableSurface paperThickness={paperThickness} />}
+        <CameraFit loadKey={indices} fitModelKey={fitModelKey + dblClickFit} positions={positions} controlsRef={orbitRef} />
 
         {indices && positions && (
           <>
@@ -911,25 +985,18 @@ export const OrigamiModernCanvas: React.FC<OrigamiModernCanvasProps> = ({
 
             {/* Dashed Reach Circle around P on table */}
             {reachCenter && reachRadius && reachRadius > 0 && (
-              <ReachCircle center={reachCenter} radius={reachRadius} />
+              <ReachCircle center={reachCenter} radius={reachRadius * VIEW.s} />
             )}
 
             {/* Legacy vertex pin markers */}
             {pinnedVertices.map((v) => {
-              const px = positions[v * 3 + 0] - 0.58;
-              const pz = -positions[v * 3 + 1] - 0.50;
-              const py = positions[v * 3 + 2];
-              return <PinMarker key={`pin-${v}`} position={[px, py, pz]} />;
+              return <PinMarker key={`pin-${v}`} position={physToWorld(positions[v * 3], positions[v * 3 + 1], positions[v * 3 + 2])} />;
             })}
 
             {/* Legacy vertex drag marker */}
             {draggedVertex !== null && (
               <DragHandleMarker
-                position={[
-                  positions[draggedVertex * 3 + 0] - 0.58,
-                  positions[draggedVertex * 3 + 2],
-                  -positions[draggedVertex * 3 + 1] - 0.50,
-                ]}
+                position={physToWorld(positions[draggedVertex * 3], positions[draggedVertex * 3 + 1], positions[draggedVertex * 3 + 2])}
               />
             )}
           </>
@@ -940,8 +1007,8 @@ export const OrigamiModernCanvas: React.FC<OrigamiModernCanvasProps> = ({
           makeDefault
           enableDamping
           dampingFactor={0.05}
-          minDistance={0.3}
-          maxDistance={10}
+          minDistance={0.2}
+          maxDistance={30}
         />
       </Canvas>
     </div>
