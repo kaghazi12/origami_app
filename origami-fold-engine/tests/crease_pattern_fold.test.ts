@@ -1,7 +1,7 @@
 import { describe, expect, it } from 'vitest';
 import fs from 'fs';
 import path from 'path';
-import { parseFold, extractPlanarFaces, createPreliminaryBasePattern } from '../../src/engine/fold';
+import { parseFold, extractPlanarFaces, createPreliminaryBasePattern, isFoldedForm, unfoldFoldedForm } from '../../src/engine/fold';
 import { foldCreasePattern, ExactFoldPlayer } from '../../src/engine/design/creasePattern';
 
 const DESIGNS = path.resolve(__dirname, '../../src/designs');
@@ -20,10 +20,11 @@ describe('bundled .fold files', () => {
       expect(Array.isArray(d[key]) && d[key].length > 0, `${file} is missing ${key}`).toBe(true);
     }
     expect(d.edges_assignment).toHaveLength(d.edges_vertices.length);
-    // faces tile the sheet exactly once
-    const V = d.vertices_coords as number[][];
+    // faces tile the sheet exactly once (folded forms are checked on their unfolded sheet)
+    const sheet = isFoldedForm(d) ? unfoldFoldedForm(d).fold : d;
+    const V = sheet.vertices_coords as number[][];
     const area = (f: number[]) => f.reduce((s, v, i) => { const a = V[v], b = V[f[(i + 1) % f.length]]; return s + a[0] * b[1] - b[0] * a[1]; }, 0) / 2;
-    const total = (d.faces_vertices as number[][]).reduce((s, f) => s + Math.abs(area(f)), 0);
+    const total = (sheet.faces_vertices as number[][]).reduce((s, f) => s + Math.abs(area(f)), 0);
     let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
     for (const [x, y] of V) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y); }
     expect(total).toBeCloseTo((maxX - minX) * (maxY - minY), 9);

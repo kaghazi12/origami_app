@@ -18,6 +18,11 @@ export interface CreasePatternInput {
   vertices_coords: number[][];
   edges_vertices: [number, number][];
   edges_assignment: string[];
+  /**
+   * Optional fold angles in degrees (positive valley). Missing or all +-180: the pattern is folded
+   * flat and its layer order is solved. Partial angles (3D models): folded to exactly those angles.
+   */
+  edges_foldAngle?: (number | null)[];
   /** Faces as vertex loops. Required (derive with extractPlanarFaces if the file has none). */
   faces_vertices: number[][];
 }
@@ -82,7 +87,14 @@ export function foldCreasePattern(cp: CreasePatternInput, opts: FoldPatternOptio
   cp.edges_vertices.forEach(([a, b], e) => edgeAt.set(a < b ? `${a},${b}` : `${b},${a}`, e));
   const angleOfEdge = (e: number) => {
     const s = cp.edges_assignment[e];
-    return s === 'M' ? -Math.PI : s === 'V' ? Math.PI : 0;
+    if (s !== 'M' && s !== 'V') return 0;
+    const deg = cp.edges_foldAngle?.[e];
+    if (deg !== null && deg !== undefined && Number.isFinite(deg)) {
+      // the sign comes from the assignment, the size from the file's angle
+      const mag = (Math.min(180, Math.abs(deg)) * Math.PI) / 180;
+      return s === 'M' ? -mag : mag;
+    }
+    return s === 'M' ? -Math.PI : Math.PI;
   };
   const vertexKey = new Map<string, number>();
   V.forEach((p, i) => vertexKey.set(`${Math.round(p[0] * 1e8)},${Math.round(p[1] * 1e8)}`, i));
@@ -111,7 +123,10 @@ export function foldCreasePattern(cp: CreasePatternInput, opts: FoldPatternOptio
   const tree = buildTree(topo, 0);
   const transforms = solveTransforms(tree, angles, [1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1, 0, 0, 0, 0, 1]);
   const tear = tearError(topo, transforms, angles).error;
-  if (tear > 1e-6) return fail('the creases do not fold flat together (the paper would tear)', tear);
+  if (tear > 1e-6) return fail('the creases do not fold together at these angles (the paper would tear)', tear);
+
+  // A 3D target (some creases only partly folded) needs no stacking order: faces are apart in space.
+  const flatTarget = angles.every((a) => Math.abs(a) < 1e-9 || Math.abs(Math.abs(a) - Math.PI) < 1e-6);
 
   const state = { topo, transforms };
   const polys = faces.map((_, i) => worldPolygon(state, i));
@@ -123,7 +138,9 @@ export function foldCreasePattern(cp: CreasePatternInput, opts: FoldPatternOptio
     if (Math.abs(angles[k]) > 1) folded.push({ a: c.a, b: c.b, sign: Math.sign(angles[k]), p0, p1 });
     else joints.push({ a: c.a, b: c.b, p0, p1 });
   });
-  const res = solveLayers({ polys, signs, folded, joints, maxConflicts: opts.maxConflicts ?? 200000 });
+  const res = flatTarget
+    ? solveLayers({ polys, signs, folded, joints, maxConflicts: opts.maxConflicts ?? 200000 })
+    : { ok: true, ranks: new Array<number>(faces.length).fill(0) };
   if (!res.ok) return fail('no stacking order lets the paper lie flat without passing through itself', tear);
 
   // per-vertex folded position: rigid position, lifted by the average stacking height of its faces

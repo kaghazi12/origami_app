@@ -134,18 +134,14 @@ function prepareExactFold(fold: FoldFormat, mode: ExactFoldMode): { player: Exac
   const creases = fold.edges_assignment.filter((a) => a === 'M' || a === 'V').length;
   const info: ExactFoldInfo = { available: false, active: false, mode, creases };
   if (creases === 0) return { player: null, info: { ...info, reason: 'no mountain/valley creases' } };
-  // Exact folding folds every crease flat. Files that ask for partial angles (3D models) use physics.
-  const partial = (fold.edges_foldAngle ?? []).some((deg, e) => {
-    const a = fold.edges_assignment[e];
-    return (a === 'M' || a === 'V') && deg !== null && deg !== undefined && Math.abs(Math.abs(deg) - 180) > 0.5;
-  });
-  if (partial) return { player: null, info: { ...info, reason: 'target fold angles are not all flat (3D model)' } };
+
   try {
     const faces = fold.faces_vertices && fold.faces_vertices.length ? fold.faces_vertices : extractPlanarFaces(fold);
     const cp = {
       vertices_coords: fold.vertices_coords as number[][],
       edges_vertices: fold.edges_vertices,
       edges_assignment: fold.edges_assignment,
+      edges_foldAngle: fold.edges_foldAngle,
       faces_vertices: faces,
     };
     const first = foldCreasePattern(cp, { layerGap: 0 });

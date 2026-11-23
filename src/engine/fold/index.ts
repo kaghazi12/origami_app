@@ -10,3 +10,4 @@ export {
   computeMiuraCoupledAngles,
 } from './templates';
 export { extractPlanarFaces, resolveTJunctions } from './faces';
+export { isFoldedForm, unfoldFoldedForm, type UnfoldResult } from './unfold';

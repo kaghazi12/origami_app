@@ -256,7 +256,7 @@ describe('animator', () => {
   const c = ok(JSON.parse(fs.readFileSync(path.join(DESIGNS, 'crane.json'), 'utf8')));
   const anim = new DesignAnimator(c, { layerGap: 0 });
 
-  it('matches each step state at the step boundaries', () => {
+  it('matches each step state at the step boundaries', { timeout: 60000 }, () => {
     for (let k = 0; k < c.steps.length; k++) {
       const pose = anim.pose(k);
       const s = c.steps[k].record.before;

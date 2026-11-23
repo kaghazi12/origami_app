@@ -18,6 +18,7 @@ import { CreasePattern2D } from './CreasePattern2D';
 import { OrigamiModernCanvas, CreasePreviewData } from './OrigamiModernCanvas';
 import { FoldFormat, TriMesh } from '../../engine/types';
 import { computeBisectorPlane, sliceMeshWithPlane, floodFillFlap } from '../../engine/mesh/creaseSlice';
+import { isFoldedForm, unfoldFoldedForm } from '../../engine/fold/unfold';
 import {
   createMiuraOriPattern,
   createWaterbombBasePattern,
@@ -312,7 +313,18 @@ export const ModernOrigamiApp: React.FC = () => {
   }, []);
 
   // Handle load model
-  const loadFoldModel = useCallback((fold: FoldFormat, density = meshDensity) => {
+  const loadFoldModel = useCallback((input: FoldFormat, density = meshDensity) => {
+    // A FOLD file may give the folded (3D) form instead of the crease pattern: unfold it into the
+    // flat sheet with a fold angle per crease, then fold that back like any other pattern.
+    let fold = input;
+    if (isFoldedForm(input)) {
+      try {
+        fold = unfoldFoldedForm(input).fold;
+      } catch (err) {
+        alert('Could not unfold this folded-form FOLD file: ' + (err as Error).message);
+        return;
+      }
+    }
     setCurrentFold(fold);
     setAlpha(0);
     setIsPlaying(false);
