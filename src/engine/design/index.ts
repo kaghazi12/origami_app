@@ -13,3 +13,4 @@ export { StepError, type StepRecord } from './ops';
 export { worldPolygon, paperArea, type PaperState, type Face, type Crease, type Topology } from './state';
 export { solveLayers, type LayerInput, type LayerResult } from './layers';
 export type { Vec2, Vec3, Mat4 } from './math';
+export { exportFold, exportCompiledFold, type FoldFile, type FoldExportOptions } from './foldExport';
