@@ -61,6 +61,8 @@ export interface LayerResult {
   pairCount: number;
   /** True if the order had a cycle among faces that don't share one region (ranks approximate). */
   cyclic: boolean;
+  /** Milliseconds spent per stage. */
+  timings?: Record<string, number>;
 }
 
 class Clauses {
@@ -154,6 +156,10 @@ function dpll(
 }
 
 export function solveLayers(input: LayerInput): LayerResult {
+  const clock = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+  const timings: Record<string, number> = {};
+  let tMark = clock();
+  const lap = (name: string) => { const t = clock(); timings[name] = (timings[name] ?? 0) + t - tMark; tMark = t; };
   const n = input.polys.length;
   const boxes = input.polys.map(bboxOf);
   const varOf = new Map<number, number>();
@@ -171,6 +177,7 @@ export function solveLayers(input: LayerInput): LayerResult {
     neighbors[j].push(i);
   }
   for (const list of neighbors) list.sort((x, y) => x - y);
+  lap('overlaps');
 
   const empty: LayerResult = { ok: true, above: new Map(), ranks: new Array(n).fill(0), pairCount: 0, cyclic: false };
   if (pairs.length === 0) return empty;
@@ -200,12 +207,18 @@ export function solveLayers(input: LayerInput): LayerResult {
     });
   }
 
+  lap('creaseRules');
   // 2. transitivity over faces sharing a common region
+  const overlapBoxes = overlaps.map(bboxOf);
   pairs.forEach(([i, j], v) => {
     const oij = overlaps[v];
+    const ob = overlapBoxes[v];
     for (const k of neighbors[i]) {
       if (k <= j) continue;
       if (varOf.get(j * n + k) === undefined) continue;
+      const kb = boxes[k];
+      // cheap reject before clipping: the three faces must share a region
+      if (kb.minX >= ob.maxX - EPS || ob.minX >= kb.maxX - EPS || kb.minY >= ob.maxY - EPS || ob.minY >= kb.maxY - EPS) continue;
       const o = clipConvex(oij, input.polys[k]);
       if (o.length < 3 || Math.abs(signedArea(o)) < AREA_EPS) continue;
       const xij = lit(i, j);
@@ -216,6 +229,7 @@ export function solveLayers(input: LayerInput): LayerResult {
     }
   });
 
+  lap('transitivity');
   // 3. taco-tortilla
   for (const f of input.folded) {
     const len = Math.hypot(f.p1[0] - f.p0[0], f.p1[1] - f.p0[1]);
@@ -297,6 +311,7 @@ export function solveLayers(input: LayerInput): LayerResult {
     }
   }
 
+  lap('tacos');
   const prefer = input.prefer;
   const assignment = dpll(
     pairs.length,
@@ -308,8 +323,9 @@ export function solveLayers(input: LayerInput): LayerResult {
     },
     input.maxConflicts ?? 20000,
   );
+  lap('search');
   if (!assignment) {
-    return { ...empty, ok: false, reason: 'no physically possible layer order', pairCount: pairs.length };
+    return { ...empty, ok: false, reason: 'no physically possible layer order', pairCount: pairs.length, timings };
   }
 
   const above = new Map<number, boolean>();
@@ -349,7 +365,8 @@ export function solveLayers(input: LayerInput): LayerResult {
     queue.push(pick);
   }
 
-  return { ok: true, above, ranks, pairCount: pairs.length, cyclic };
+  lap('ranks');
+  return { ok: true, above, ranks, pairCount: pairs.length, cyclic, timings };
 }
 
 function collinearOverlap(a0: Vec2, a1: Vec2, b0: Vec2, b1: Vec2): boolean {

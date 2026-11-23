@@ -5,7 +5,43 @@ import { BarHingeSolver, computeStableTimeStep, seedFromFlat } from '../physics/
 import { XPBDSolver } from '../physics/xpbd';
 import { FoldSolver } from '../physics/types';
 import { TriMesh, FoldFormat } from '../types';
-import { CreaseEdgeInfo, WorkerFrameStats, WorkerRequest, WorkerResponse } from './types';
+import { CreaseEdgeInfo, ExactFoldInfo, ExactFoldMode, WorkerFrameStats, WorkerRequest, WorkerResponse } from './types';
+import { extractPlanarFaces } from '../fold/faces';
+import { ExactFoldPlayer, foldCreasePattern, withLayerGap } from '../design/creasePattern';
+
+/** Patterns with more folded creases than this are folded exactly in 'auto' mode. */
+const EXACT_AUTO_MIN_CREASES = 24;
+let exactPlayer: ExactFoldPlayer | null = null;
+let exactInfo: ExactFoldInfo | undefined;
+let lastLoadRequest: Extract<WorkerRequest, { type: 'LOAD' }> | null = null;
+
+/** Try to fold the crease pattern exactly. Returns the player (when it should drive the fold) and info. */
+function prepareExactFold(fold: FoldFormat, mode: ExactFoldMode): { player: ExactFoldPlayer | null; info: ExactFoldInfo } {
+  const creases = fold.edges_assignment.filter((a) => a === 'M' || a === 'V').length;
+  const info: ExactFoldInfo = { available: false, active: false, mode, creases };
+  if (creases === 0) return { player: null, info: { ...info, reason: 'no mountain/valley creases' } };
+  try {
+    const faces = fold.faces_vertices && fold.faces_vertices.length ? fold.faces_vertices : extractPlanarFaces(fold);
+    const cp = {
+      vertices_coords: fold.vertices_coords as number[][],
+      edges_vertices: fold.edges_vertices,
+      edges_assignment: fold.edges_assignment,
+      faces_vertices: faces,
+    };
+    const first = foldCreasePattern(cp, { layerGap: 0 });
+    if (!first.ok) return { player: null, info: { ...info, reason: first.reason, timeMs: first.timeMs } };
+    // keep tall stacks shallow enough to still look like paper
+    const gap = Math.min(0.0008, 0.06 / Math.max(1, first.layerCount));
+    const folded = withLayerGap(first.flatVertices, first.vertexRanks, gap);
+    const active = mode === 'on' || (mode === 'auto' && creases > EXACT_AUTO_MIN_CREASES);
+    return {
+      player: active ? new ExactFoldPlayer(cp, folded) : null,
+      info: { ...info, available: true, active, layers: first.layerCount, timeMs: first.timeMs },
+    };
+  } catch (e) {
+    return { player: null, info: { ...info, reason: (e as Error).message } };
+  }
+}
 
 // State in Worker
 let mesh: TriMesh | null = null;
@@ -86,6 +122,11 @@ function runPhysicsTick() {
   let substeps = 0;
   let pe = 0;
   let ke = 0;
+
+  if (exactPlayer) {
+    runExactTick(tickStart);
+    return;
+  }
 
   // Adaptive Continuation: advance currentAlpha only as fast as solver keeps strain strictly below 4%
   const currentStrain = solver.getMaxStrain();
@@ -201,6 +242,52 @@ function runPhysicsTick() {
   }
 }
 
+/** One frame of the exact fold: move alpha toward the target and pose the pattern directly. */
+function runExactTick(tickStart: number) {
+  if (!mesh || !exactPlayer) return;
+  const rate = 0.02;
+  if (currentAlpha < targetAlpha) currentAlpha = Math.min(targetAlpha, currentAlpha + rate);
+  else if (currentAlpha > targetAlpha) currentAlpha = Math.max(targetAlpha, currentAlpha - rate);
+  exactPlayer.pose(currentAlpha, mesh.positions);
+  mesh.velocities.fill(0);
+  stepCounter++;
+  const reached = Math.abs(currentAlpha - targetAlpha) < 1e-9;
+
+  if (!isAwaitingBuffer) {
+    const now = performance.now();
+    const timeBetweenPostsMs = lastPostTime > 0 ? now - lastPostTime : 0;
+    lastPostTime = now;
+    const numCoords = mesh.numVertices * 3;
+    const posF32 = new Float32Array(getRecycledBuffer(numCoords * 4));
+    for (let i = 0; i < numCoords; i++) posF32[i] = mesh.positions[i];
+    const stats: WorkerFrameStats = {
+      potentialEnergy: 0,
+      kineticEnergy: 0,
+      maxResidualForce: 0,
+      maxStrain: 0,
+      converged: reached,
+      alpha: currentAlpha,
+      targetAlpha,
+      stepCount: stepCounter,
+      substepsInTick: 0,
+      iterationsPerTick: 0,
+      tickDurationMs: now - tickStart,
+      stepDurationMs: 0,
+      postTimestamp: typeof performance !== 'undefined' && performance.timeOrigin ? performance.timeOrigin + now : Date.now(),
+      timeBetweenPostsMs,
+    };
+    isAwaitingBuffer = true;
+    const response: WorkerResponse = { type: 'FRAME', positions: posF32, stats };
+    (self as unknown as Worker).postMessage(response, [posF32.buffer]);
+    if (reached) {
+      isConverged = true;
+      isSleeping = true; // nothing moves until the slider changes (SET_ALPHA wakes us)
+      return;
+    }
+  }
+  scheduleNextTick();
+}
+
 function postLoadedResponse(fold?: FoldFormat | null) {
   if (!mesh) return;
   // Extract crease edges for 3D visualization
@@ -238,6 +325,7 @@ function postLoadedResponse(fold?: FoldFormat | null) {
     creaseEdges,
     bounds: { minX, maxX, minY, maxY },
     bakedFold: fold ?? undefined,
+    exact: exactInfo,
   };
   (self as unknown as Worker).postMessage(loadedResp);
 }
@@ -255,7 +343,12 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
           facetStiffness: 200,
         };
 
-        mesh = createMeshFromFold(req.fold, options);
+        lastLoadRequest = req;
+        const exact = prepareExactFold(req.fold, req.exactFold ?? 'auto');
+        // The exact fold moves the crease-pattern vertices, so build the mesh on them directly.
+        mesh = createMeshFromFold(req.fold, exact.player ? { ...options, targetEdgeLength: undefined } : options);
+        exactPlayer = exact.player && mesh.numVertices === req.fold.vertices_coords.length ? exact.player : null;
+        exactInfo = exactPlayer ? exact.info : { ...exact.info, active: false };
         const sOpts = req.solverOptions ?? {};
         solver = new XPBDSolver(mesh, {
           substeps: sOpts.substeps ?? 10,
@@ -273,9 +366,11 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
           enableSelfCollision: sOpts.enableSelfCollision ?? false,
         });
 
-        // Seed microscopic out-of-plane perturbation at center
-        const center = Math.floor(mesh.numVertices / 2);
-        mesh.positions[center * 3 + 2] = 0.01;
+        // Seed microscopic out-of-plane perturbation at center (physics only)
+        if (!exactPlayer) {
+          const center = Math.floor(mesh.numVertices / 2);
+          mesh.positions[center * 3 + 2] = 0.01;
+        }
 
         currentFold = req.fold;
         currentMeshOptions = options;
@@ -294,6 +389,13 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
 
         postLoadedResponse(currentFold);
         startLoop();
+        break;
+      }
+
+      case 'SET_EXACT_FOLD': {
+        if (!lastLoadRequest || !currentFold) return;
+        const reload = { ...lastLoadRequest, fold: currentFold, exactFold: req.mode };
+        (self.onmessage as (ev: MessageEvent<WorkerRequest>) => void)({ data: reload } as MessageEvent<WorkerRequest>);
         break;
       }
 
@@ -471,6 +573,8 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
           creaseStiffness: req.creaseStiffness ?? 500,
         });
         mesh = newMesh;
+        exactPlayer = null;
+        if (exactInfo) exactInfo = { ...exactInfo, active: false, available: false, reason: 'pattern edited' };
 
         // Update currentFold with newly added creases
         currentFold = bakeCreasesToFold(
@@ -521,6 +625,8 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
           });
           const prev = undoStack.pop()!;
           mesh = prev.mesh;
+          exactPlayer = null;
+          if (exactInfo) exactInfo = { ...exactInfo, active: false, available: false, reason: 'pattern edited' };
           currentFold = prev.fold;
 
           const sOpts = currentPhysicsParams ?? {};
@@ -556,6 +662,8 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
           });
           const next = redoStack.pop()!;
           mesh = next.mesh;
+          exactPlayer = null;
+          if (exactInfo) exactInfo = { ...exactInfo, active: false, available: false, reason: 'pattern edited' };
           currentFold = next.fold;
 
           const sOpts = currentPhysicsParams ?? {};

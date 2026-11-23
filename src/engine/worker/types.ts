@@ -20,6 +20,12 @@ export type WorkerRequest =
         substeps?: number;
       enableSelfCollision?: boolean;
       };
+      /** Fold complex crease patterns exactly instead of simulating them (default 'auto'). */
+      exactFold?: ExactFoldMode;
+    }
+  | {
+      type: 'SET_EXACT_FOLD';
+      mode: ExactFoldMode;
     }
   | {
       type: 'SET_ALPHA';
@@ -100,6 +106,20 @@ export type WorkerRequest =
       buffer: ArrayBufferLike;
     };
 
+export type ExactFoldMode = 'auto' | 'on' | 'off';
+
+export interface ExactFoldInfo {
+  /** The pattern can be folded exactly (M/V creases fold flat as one piece with a valid stacking). */
+  available: boolean;
+  /** The fold slider is driving the exact fold (instead of the physics simulation). */
+  active: boolean;
+  mode: ExactFoldMode;
+  reason?: string;
+  layers?: number;
+  creases?: number;
+  timeMs?: number;
+}
+
 export interface WorkerFrameStats {
   potentialEnergy: number;
   kineticEnergy: number;
@@ -136,6 +156,7 @@ export type WorkerResponse =
       creaseEdges: CreaseEdgeInfo[];
       bounds: { minX: number; maxX: number; minY: number; maxY: number };
       bakedFold?: FoldFormat;
+      exact?: ExactFoldInfo;
     }
   | {
       type: 'FRAME';

@@ -1,5 +1,5 @@
 import { FoldFormat, MeshOptions } from '../types';
-import { CreaseEdgeInfo, WorkerFrameStats, WorkerRequest, WorkerResponse } from './types';
+import { CreaseEdgeInfo, ExactFoldInfo, ExactFoldMode, WorkerFrameStats, WorkerRequest, WorkerResponse } from './types';
 
 export interface LoadedMeshInfo {
   numVertices: number;
@@ -9,6 +9,7 @@ export interface LoadedMeshInfo {
   creaseEdges: CreaseEdgeInfo[];
   bounds: { minX: number; maxX: number; minY: number; maxY: number };
   bakedFold?: FoldFormat;
+  exact?: ExactFoldInfo;
 }
 
 export interface FrameEvent {
@@ -72,6 +73,7 @@ export class OrigamiWorkerClient {
           creaseEdges: data.creaseEdges,
           bounds: data.bounds,
           bakedFold: data.bakedFold,
+          exact: data.exact,
         });
         break;
       }
@@ -111,14 +113,21 @@ export class OrigamiWorkerClient {
       bendingCompliance?: number;
       substeps?: number;
       enableSelfCollision?: boolean;
-    }
+    },
+    exactFold?: ExactFoldMode
   ): void {
     this.postMessage({
       type: 'LOAD',
       fold,
       meshOptions,
       solverOptions,
+      ...(exactFold ? { exactFold } : {}),
     });
+  }
+
+  /** Switch between exact folding and physics for the loaded pattern (reloads it). */
+  setExactFold(mode: ExactFoldMode): void {
+    this.postMessage({ type: 'SET_EXACT_FOLD', mode });
   }
 
   setPhysicsParams(params: {

@@ -113,6 +113,9 @@ export const ModernOrigamiApp: React.FC = () => {
   const [paperStiffnessPreset, setPaperStiffnessPreset] = useState<number>(50); // 0 (tissue) to 100 (card)
   const [substepsPerFrame, setSubstepsPerFrame] = useState<number>(10);
   const [enableSelfCollision, setEnableSelfCollision] = useState<boolean>(true);
+  // Complex crease patterns: fold exactly instead of simulating ('auto' = when the pattern is complex)
+  const [exactFoldMode, setExactFoldMode] = useState<'auto' | 'on' | 'off'>('auto');
+  const exactFoldModeRef = useRef<'auto' | 'on' | 'off'>('auto');
 
   // Phase 7: Pivot-and-drag interaction state (barycentric points + tool mode)
   const [activeTool, setActiveTool] = useState<'pivot' | 'drag'>('drag');
@@ -287,7 +290,8 @@ export const ModernOrigamiApp: React.FC = () => {
         bendingCompliance,
         substeps: substepsPerFrame,
         enableSelfCollision,
-      }
+      },
+      exactFoldModeRef.current
     );
 
     return () => {
@@ -324,7 +328,8 @@ export const ModernOrigamiApp: React.FC = () => {
         bendingCompliance,
         substeps: substepsPerFrame,
         enableSelfCollision,
-      }
+      },
+      exactFoldModeRef.current
     );
   }, [axialStiffness, creaseStiffness, facetStiffness, meshDensity, paperStiffnessPreset, enableTable, paperThickness, enableGravity, gravity, muStatic, muKinetic, substepsPerFrame, enableSelfCollision]);
 
@@ -1187,6 +1192,42 @@ export const ModernOrigamiApp: React.FC = () => {
             />
             <span>Self-Collision</span>
           </label>
+
+          {/* Exact folding for complex crease patterns */}
+          <div
+            className="flex items-center space-x-1.5"
+            title="Complex crease patterns (box pleating, tessellations) can't be folded by simulating every crease at once. Exact mode computes the folded model directly."
+          >
+            <span className="text-gray-500">Exact fold:</span>
+            <select
+              value={exactFoldMode}
+              onChange={(e) => {
+                const mode = e.target.value as 'auto' | 'on' | 'off';
+                setExactFoldMode(mode);
+                exactFoldModeRef.current = mode;
+                setAlpha(0);
+                setIsPlaying(false);
+                clientRef.current?.setExactFold(mode);
+              }}
+              className="border border-gray-300 rounded px-1 py-0.5 text-xs bg-white"
+            >
+              <option value="auto">Auto</option>
+              <option value="on">On</option>
+              <option value="off">Off (physics)</option>
+            </select>
+            {loadedInfo?.exact && (
+              <span
+                className={`text-[11px] ${loadedInfo.exact.active ? 'text-emerald-700' : 'text-gray-500'}`}
+                title={loadedInfo.exact.reason ?? ''}
+              >
+                {loadedInfo.exact.active
+                  ? `exact · ${loadedInfo.exact.layers} layers`
+                  : loadedInfo.exact.available
+                    ? 'physics (exact available)'
+                    : `physics${loadedInfo.exact.reason ? ` · ${loadedInfo.exact.reason}` : ''}`}
+              </span>
+            )}
+          </div>
 
           {/* Thickness */}
           <div className="flex items-center space-x-1.5">
