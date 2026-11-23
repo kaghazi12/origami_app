@@ -28,6 +28,7 @@ import {
 } from './materials/PaperShaderMaterial';
 
 import { ModernOrigamiApp } from './components/modern/ModernOrigamiApp';
+import { PrototypeApp } from './components/prototype/PrototypeApp';
 
 const INITIAL_MODELS: Record<string, FoldModel> = {
   [PRELIMINARY_FOLD_MODEL.id]: PRELIMINARY_FOLD_MODEL,
@@ -263,18 +264,17 @@ const LegacyApp: React.FC = () => {
 };
 
 export const App: React.FC = () => {
-  const [engineMode, setEngineMode] = useState<'modern' | 'legacy'>(() => {
-    if (typeof window !== 'undefined' && window.location.hash === '#legacy') {
-      return 'legacy';
-    }
-    return 'modern';
-  });
+  type EngineMode = 'prototype' | 'modern' | 'legacy';
+  const modeFromHash = (): EngineMode => {
+    if (typeof window === 'undefined') return 'prototype';
+    if (window.location.hash === '#legacy') return 'legacy';
+    if (window.location.hash === '#modern') return 'modern';
+    return 'prototype';
+  };
+  const [engineMode, setEngineMode] = useState<EngineMode>(modeFromHash);
 
   useEffect(() => {
-    const handleHashChange = () => {
-      if (window.location.hash === '#legacy') setEngineMode('legacy');
-      else setEngineMode('modern');
-    };
+    const handleHashChange = () => setEngineMode(modeFromHash());
     window.addEventListener('hashchange', handleHashChange);
     return () => window.removeEventListener('hashchange', handleHashChange);
   }, []);
@@ -286,6 +286,19 @@ export const App: React.FC = () => {
         <div className="flex items-center space-x-2">
           <span className="font-bold tracking-wider text-slate-300">ENGINE ARCHITECTURE:</span>
           <div className="inline-flex p-0.5 bg-slate-900 rounded-lg border border-slate-800">
+            <button
+              onClick={() => {
+                setEngineMode('prototype');
+                window.location.hash = '#prototype';
+              }}
+              className={`px-3 py-1 font-semibold rounded-md transition-all ${
+                engineMode === 'prototype'
+                  ? 'bg-emerald-600 text-white shadow-sm'
+                  : 'text-slate-400 hover:text-slate-200'
+              }`}
+            >
+              Prototype Engine (Design Format v1)
+            </button>
             <button
               onClick={() => {
                 setEngineMode('modern');
@@ -316,13 +329,13 @@ export const App: React.FC = () => {
         </div>
 
         <div className="text-[11px] text-slate-500">
-          Route: <code className="text-slate-400">{engineMode === 'legacy' ? '#legacy' : '#modern'}</code>
+          Route: <code className="text-slate-400">#{engineMode}</code>
         </div>
       </div>
 
       {/* Main Container */}
       <div className="flex-1 w-full h-full min-h-0 overflow-hidden">
-        {engineMode === 'modern' ? <ModernOrigamiApp /> : <LegacyApp />}
+        {engineMode === 'prototype' ? <PrototypeApp /> : engineMode === 'modern' ? <ModernOrigamiApp /> : <LegacyApp />}
       </div>
     </div>
   );
