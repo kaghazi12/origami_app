@@ -2,9 +2,17 @@ import React, { useRef, useEffect, useMemo, useState, useCallback } from 'react'
 import { Canvas, useThree } from '@react-three/fiber';
 import { OrbitControls, Center } from '@react-three/drei';
 import * as THREE from 'three';
+import { theme, rgb } from '../../theme';
+
 import { CreaseEdgeInfo } from '../../engine/worker/types';
 import { computeBisectorPlane, sliceMeshWithPlane, floodFillFlap, BisectorPlane } from '../../engine/mesh/creaseSlice';
 import { TriMesh, EdgeAssignment } from '../../engine/types';
+
+/** Crease line colours (diagram notation) as RGB for the vertex-colour buffer. */
+const MOUNTAIN_RGB = rgb(theme.mountain);
+const VALLEY_RGB = rgb(theme.valley);
+const EDGE_RGB = rgb(theme.paperEdge);
+const OTHER_RGB = rgb(theme.lineStrong);
 
 export interface CreasePreviewData {
   plane: BisectorPlane;
@@ -130,7 +138,7 @@ const ReachCircle: React.FC<{ center: [number, number, number]; radius: number }
   return (
     <group position={center}>
       <lineLoop geometry={lineGeo}>
-        <lineDashedMaterial color="#d97706" dashSize={0.03} gapSize={0.02} />
+        <lineDashedMaterial color={theme.inkMuted} dashSize={0.03} gapSize={0.02} />
       </lineLoop>
     </group>
   );
@@ -141,11 +149,11 @@ const PinMarker: React.FC<{ position: [number, number, number] }> = ({ position 
     <group position={position}>
       <mesh position={[0, 0.04, 0]}>
         <sphereGeometry args={[0.015, 16, 16]} />
-        <meshStandardMaterial color="#f59e0b" roughness={0.2} metalness={0.6} emissive="#b45309" emissiveIntensity={0.5} />
+        <meshStandardMaterial color={theme.accent} roughness={0.5} metalness={0} />
       </mesh>
       <mesh position={[0, 0.02, 0]}>
         <cylinderGeometry args={[0.002, 0.002, 0.04, 8]} />
-        <meshStandardMaterial color="#cbd5e1" roughness={0.2} metalness={0.8} />
+        <meshStandardMaterial color={theme.ink} roughness={0.6} metalness={0} />
       </mesh>
     </group>
   );
@@ -156,12 +164,12 @@ const DragHandleMarker: React.FC<{ position: [number, number, number] }> = ({ po
     <group position={position}>
       <mesh>
         <sphereGeometry args={[0.02, 16, 16]} />
-        <meshStandardMaterial color="#06b6d4" roughness={0.2} metalness={0.5} emissive="#0891b2" emissiveIntensity={0.6} />
+        <meshStandardMaterial color={theme.ink} roughness={0.5} metalness={0} />
       </mesh>
       {/* Visual orientation ring */}
       <mesh rotation={[-Math.PI / 2, 0, 0]}>
         <ringGeometry args={[0.025, 0.03, 24]} />
-        <meshBasicMaterial color="#22d3ee" side={THREE.DoubleSide} />
+        <meshBasicMaterial color={theme.ink} transparent opacity={0.5} side={THREE.DoubleSide} />
       </mesh>
     </group>
   );
@@ -520,14 +528,9 @@ const PaperMesh: React.FC<{
     // Prepopulate colors: Mountain red, Valley blue, Boundary dark
     for (let i = 0; i < creaseEdges.length; i++) {
       const e = creaseEdges[i];
-      let r = 0.5, g = 0.5, b = 0.5;
-      if (e.assignment === 'M') {
-        r = 0.94; g = 0.27; b = 0.27; // Red
-      } else if (e.assignment === 'V') {
-        r = 0.23; g = 0.51; b = 0.96; // Blue
-      } else if (e.assignment === 'B') {
-        r = 0.10; g = 0.10; b = 0.10; // Dark
-      }
+      // diagram notation: mountain red, valley blue, paper edge ink, the rest faint
+      const [r, g, b] =
+        e.assignment === 'M' ? MOUNTAIN_RGB : e.assignment === 'V' ? VALLEY_RGB : e.assignment === 'B' ? EDGE_RGB : OTHER_RGB;
       lineColAttr.setXYZ(i * 2 + 0, r, g, b);
       lineColAttr.setXYZ(i * 2 + 1, r, g, b);
     }
@@ -649,7 +652,7 @@ const PaperMesh: React.FC<{
       previewLineRef.current.computeLineDistances();
       if (preview.assignment) {
         ((previewLineRef.current.material as THREE.Material) as any)?.color?.set?.(
-          preview.assignment === 'M' ? '#ef4444' : '#3b82f6'
+          preview.assignment === 'M' ? theme.mountain : theme.valley
         );
       }
     }
@@ -723,9 +726,9 @@ const PaperMesh: React.FC<{
       {/* Moving Flap Shading Overlay (In-Place Dynamic Draw Range) */}
       <mesh geometry={flapOverlayGeoRef.current!} raycast={() => null}>
         <meshStandardMaterial
-          color="#38bdf8"
+          color={theme.valley}
           transparent
-          opacity={0.35}
+          opacity={0.18}
           roughness={0.5}
           side={THREE.DoubleSide}
           depthWrite={false}
@@ -745,7 +748,7 @@ const PaperMesh: React.FC<{
       {/* Live Dashed Crease Preview Line (In-Place Dynamic Draw Range) */}
       <lineSegments ref={previewLineRef} geometry={previewLineGeoRef.current!} raycast={() => null}>
         <lineDashedMaterial
-          color={previewCrease?.assignment === 'M' ? '#ef4444' : '#3b82f6'}
+          color={previewCrease?.assignment === 'M' ? theme.mountain : theme.valley}
           dashSize={0.02}
           gapSize={0.015}
           linewidth={3}
@@ -791,21 +794,21 @@ const TableSurface: React.FC<{ paperThickness?: number }> = ({ paperThickness = 
   return (
     <group position={[0, 0, 0]}>
       {/* Subtle tabletop grid */}
-      <gridHelper args={[3, 30, '#94a3b8', '#e2e8f0']} position={[0, -0.0005, 0]} raycast={() => null} />
+      <gridHelper args={[3, 30, theme.lineStrong, theme.line]} position={[0, -0.0005, 0]} raycast={() => null} />
 
       {/* Tabletop receiver plane */}
       <mesh position={[0, -0.001, 0]} rotation={[-Math.PI / 2, 0, 0]} receiveShadow raycast={() => null}>
         <planeGeometry args={[4, 4]} />
-        <meshStandardMaterial color="#f8fafc" roughness={0.85} metalness={0.05} />
+        <meshStandardMaterial color={theme.canvas} roughness={0.9} metalness={0} />
       </mesh>
 
       {/* Soft Contact Shadow beneath paper sheet */}
       <mesh position={[0, -0.0002, 0]} rotation={[-Math.PI / 2, 0, 0]} raycast={() => null}>
         <planeGeometry args={[1.3, 1.3]} />
         <meshBasicMaterial
-          color="#0f172a"
+          color={theme.ink}
           transparent
-          opacity={0.15}
+          opacity={0.1}
           depthWrite={false}
         />
       </mesh>
@@ -863,8 +866,8 @@ export const OrigamiModernCanvas: React.FC<OrigamiModernCanvasProps> = ({
   uvs = null,
   creaseEdges,
   showCreases = true,
-  frontColor = '#FCFBF7',
-  backColor = '#EA580C',
+  frontColor = theme.paperFront,
+  backColor = theme.paperBack,
   className = '',
   showTable = false,
   paperThickness = 0.002,
@@ -938,16 +941,17 @@ export const OrigamiModernCanvas: React.FC<OrigamiModernCanvasProps> = ({
       : 'cursor-grab';
 
   return (
-    <div className={`relative w-full h-full min-h-[300px] bg-gradient-to-b from-gray-100 to-gray-200 rounded-lg overflow-hidden border border-gray-300 ${cursorClass} ${className}`}>
+    <div className={`relative w-full h-full overflow-hidden ${cursorClass} ${className}`}>
       <Canvas
         onDoubleClick={() => setDblClickFit((k) => k + 1)}
         camera={{ position: [0.0, 2.8, 2.0], fov: 45, near: 0.01, far: 100 }}
         gl={{ antialias: true, alpha: true }}
       >
         <ThreeProfiler />
-        <ambientLight intensity={0.8} />
-        <directionalLight position={[3, 6, 4]} intensity={1.2} castShadow />
-        <directionalLight position={[-3, 4, -2]} intensity={0.4} />
+        {/* soft, neutral light: one key, one fill, warm bounce */}
+        <hemisphereLight args={[theme.lightSky, theme.lightGround, 1.6]} />
+        <directionalLight position={[3, 6, 4]} intensity={1.6} castShadow />
+        <directionalLight position={[-3, 4, -2]} intensity={0.5} />
 
         {showTable && <TableSurface paperThickness={paperThickness} />}
         <CameraFit loadKey={indices} fitModelKey={fitModelKey + dblClickFit} positions={positions} controlsRef={orbitRef} />

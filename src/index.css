@@ -1,45 +1,185 @@
 @import "tailwindcss";
 
+/*
+ * Design tokens. Components use only these (bg-surface, text-ink-muted, border-line, bg-accent...).
+ * See .claude/skills/frontend-design/SKILL.md. The 3D scenes can't read CSS variables, so the
+ * colours they need are mirrored in src/theme.ts — change both together.
+ */
+@theme {
+  /* Paper (surfaces) */
+  --color-canvas: #f4f1ea;
+  --color-surface: #fbfaf6;
+  --color-surface-raised: #ffffff;
+  --color-viewer: #ece8df;
+  --color-sunken: #eae6dc;
+
+  /* Ink (text, lines) */
+  --color-ink: #1c1a17;
+  --color-ink-muted: #5e5950;
+  --color-ink-faint: #8f897d;
+  --color-line: #ddd8cc;
+  --color-line-strong: #c7c1b3;
+
+  /* Accent: kami red. Use sparingly. */
+  --color-accent: #c2412d;
+  --color-accent-hover: #a93624;
+  --color-accent-soft: #f6e3de;
+  --color-on-accent: #ffffff;
+
+  /* Origami semantics */
+  --color-valley: #2f5da8;
+  --color-mountain: #c2412d;
+  --color-border-crease: #1c1a17;
+
+  /* Status */
+  --color-success: #3f7a4f;
+  --color-success-soft: #e3efe5;
+  --color-warning: #9a6b12;
+  --color-warning-soft: #f5ecd7;
+  --color-danger: #b3261e;
+  --color-danger-soft: #f7e1df;
+
+  /* Type */
+  --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Newsreader", ui-serif, Georgia, serif;
+  --font-mono: "Geist Mono", ui-monospace, monospace;
+
+  /* Shape */
+  --radius-sm: 4px;
+  --radius-md: 6px;
+  --radius-lg: 10px;
+
+  /* Elevation */
+  --shadow-float: 0 1px 2px rgb(28 26 23 / 0.06), 0 4px 12px rgb(28 26 23 / 0.08);
+  --shadow-dialog: 0 2px 4px rgb(28 26 23 / 0.06), 0 12px 32px rgb(28 26 23 / 0.14);
+
+  /* Motion */
+  --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+
+  /* Indeterminate progress line */
+  --animate-progress: progress-slide 1.2s var(--ease-out) infinite;
+
+  @keyframes progress-slide {
+    0% { transform: translateX(-100%); }
+    100% { transform: translateX(250%); }
+  }
+}
+
 @layer base {
-  * {
-    box-sizing: border-box;
-    margin: 0;
-    padding: 0;
+  html {
+    background-color: var(--color-canvas);
   }
 
   body {
-    font-family: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
-    background-color: #030712;
-    color: #f8fafc;
-    overflow: hidden;
+    font-family: var(--font-sans);
+    background-color: var(--color-canvas);
+    color: var(--color-ink);
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+    text-rendering: optimizeLegibility;
+  }
+
+  ::selection {
+    background-color: var(--color-accent-soft);
+    color: var(--color-ink);
+  }
+
+  /* The 3D canvas handles its own pointer gestures; don't select text while orbiting or dragging. */
+  canvas {
     user-select: none;
     -webkit-user-select: none;
+    touch-action: none;
   }
 }
 
-/* Custom Sleek Scrollbar */
-::-webkit-scrollbar {
-  width: 6px;
-  height: 6px;
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    transition-duration: 0ms !important;
+    animation-duration: 0ms !important;
+  }
 }
 
-::-webkit-scrollbar-track {
-  background: rgba(15, 23, 42, 0.6);
+/*
+ * Range inputs. The track and fill are drawn by the component (Scrubber, DevSlider); the native
+ * input sits on top, transparent, so it keeps keyboard and screen-reader behaviour.
+ */
+.range-input {
+  -webkit-appearance: none;
+  appearance: none;
+  background: transparent;
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  cursor: pointer;
 }
 
-::-webkit-scrollbar-thumb {
-  background: rgba(51, 65, 85, 0.8);
+.range-input:focus {
+  outline: none;
+}
+
+.range-input::-webkit-slider-runnable-track {
+  height: 100%;
+  background: transparent;
+}
+
+.range-input::-moz-range-track {
+  height: 100%;
+  background: transparent;
+}
+
+.range-input::-webkit-slider-thumb {
+  -webkit-appearance: none;
+  appearance: none;
+  width: 14px;
+  height: 14px;
+  margin-top: calc((var(--range-h, 20px) - 14px) / 2);
   border-radius: 9999px;
+  background: var(--color-surface-raised);
+  border: 1.5px solid var(--color-ink);
+  box-shadow: 0 1px 2px rgb(28 26 23 / 0.2);
+  transition: transform 120ms var(--ease-out);
 }
 
-::-webkit-scrollbar-thumb:hover {
-  background: rgba(225, 29, 72, 0.7);
+.range-input::-moz-range-thumb {
+  width: 14px;
+  height: 14px;
+  border-radius: 9999px;
+  background: var(--color-surface-raised);
+  border: 1.5px solid var(--color-ink);
+  box-shadow: 0 1px 2px rgb(28 26 23 / 0.2);
 }
 
-/* Glassmorphism utility */
-.glass-panel {
-  background: rgba(15, 23, 42, 0.85);
-  backdrop-filter: blur(16px);
-  -webkit-backdrop-filter: blur(16px);
-  border: 1px solid rgba(51, 65, 85, 0.5);
+.range-input:active::-webkit-slider-thumb {
+  transform: scale(1.1);
+}
+
+.range-input:focus-visible::-webkit-slider-thumb {
+  box-shadow: 0 0 0 4px rgb(194 65 45 / 0.25);
+}
+
+.range-input:focus-visible::-moz-range-thumb {
+  box-shadow: 0 0 0 4px rgb(194 65 45 / 0.25);
+}
+
+.range-input:disabled {
+  cursor: not-allowed;
+}
+
+.range-input-sm::-webkit-slider-thumb {
+  width: 12px;
+  height: 12px;
+  margin-top: calc((var(--range-h, 16px) - 12px) / 2);
+}
+
+.range-input-sm::-moz-range-thumb {
+  width: 12px;
+  height: 12px;
+}
+
+/* Quiet scrollbars that match the paper */
+* {
+  scrollbar-width: thin;
+  scrollbar-color: var(--color-line-strong) transparent;
 }
