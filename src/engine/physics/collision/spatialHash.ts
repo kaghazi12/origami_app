@@ -26,6 +26,9 @@ export class SpatialHash {
   private entryCount: number = 0;
   private maxEntries: number;
 
+  // Per-triangle padded AABBs from the last build (exact overlap filter for candidate pairs)
+  private aabb: Float64Array = new Float64Array(0);
+
   // Preallocated candidate pairs pool
   private candidatePairs: [number, number][] = [];
 
@@ -158,6 +161,10 @@ export class SpatialHash {
   ): void {
     this.head.fill(-1);
     this.entryCount = 0;
+    if (this.aabb.length < numFaces * 6) this.aabb = new Float64Array(numFaces * 6);
+    const box = this.aabb;
+    // Half margin on each box: two boxes overlap iff the triangles' AABBs are within `margin`.
+    const hm = margin * 0.5;
 
     const inv = this.invCellSize;
 
@@ -170,12 +177,15 @@ export class SpatialHash {
       const x1 = positions[v1 + 0], y1 = positions[v1 + 1], z1 = positions[v1 + 2];
       const x2 = positions[v2 + 0], y2 = positions[v2 + 1], z2 = positions[v2 + 2];
 
-      const minX = Math.min(x0, x1, x2) - margin;
-      const maxX = Math.max(x0, x1, x2) + margin;
-      const minY = Math.min(y0, y1, y2) - margin;
-      const maxY = Math.max(y0, y1, y2) + margin;
-      const minZ = Math.min(z0, z1, z2) - margin;
-      const maxZ = Math.max(z0, z1, z2) + margin;
+      const minX = Math.min(x0, x1, x2) - hm;
+      const maxX = Math.max(x0, x1, x2) + hm;
+      const minY = Math.min(y0, y1, y2) - hm;
+      const maxY = Math.max(y0, y1, y2) + hm;
+      const minZ = Math.min(z0, z1, z2) - hm;
+      const maxZ = Math.max(z0, z1, z2) + hm;
+      const b6 = t * 6;
+      box[b6] = minX; box[b6 + 1] = minY; box[b6 + 2] = minZ;
+      box[b6 + 3] = maxX; box[b6 + 4] = maxY; box[b6 + 5] = maxZ;
 
       const iMin = Math.floor(minX * inv);
       const iMax = Math.floor(maxX * inv);
@@ -229,6 +239,13 @@ export class SpatialHash {
 
             if (isAdj[pairIdx] === 0 && stamps[pairIdx] !== stamp) {
               stamps[pairIdx] = stamp;
+              const A = minT * 6, B = maxT * 6, bx = this.aabb;
+              if (bx[A] > bx[B + 3] || bx[B] > bx[A + 3] ||
+                  bx[A + 1] > bx[B + 4] || bx[B + 1] > bx[A + 4] ||
+                  bx[A + 2] > bx[B + 5] || bx[B + 2] > bx[A + 5]) {
+                idx2 = this.next[idx2];
+                continue;
+              }
               if (pairCount >= this.candidatePairs.length) {
                 this.candidatePairs.push([minT, maxT]);
               } else {

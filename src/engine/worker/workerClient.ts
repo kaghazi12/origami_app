@@ -1,5 +1,5 @@
 import { FoldFormat, MeshOptions } from '../types';
-import { CreaseEdgeInfo, WorkerFrameStats, WorkerRequest, WorkerResponse } from './types';
+import { CreaseEdgeInfo, ExactFoldInfo, ExactFoldMode, WorkerFrameStats, WorkerRequest, WorkerResponse } from './types';
 
 export interface LoadedMeshInfo {
   numVertices: number;
@@ -9,6 +9,7 @@ export interface LoadedMeshInfo {
   creaseEdges: CreaseEdgeInfo[];
   bounds: { minX: number; maxX: number; minY: number; maxY: number };
   bakedFold?: FoldFormat;
+  exact?: ExactFoldInfo;
 }
 
 export interface FrameEvent {
@@ -20,12 +21,14 @@ export interface FrameEvent {
 export type LoadedCallback = (info: LoadedMeshInfo) => void;
 export type FrameCallback = (event: FrameEvent) => void;
 export type ErrorCallback = (error: string) => void;
+export type StateChangedCallback = (state: { paused: boolean; alpha: number }) => void;
 
 export class OrigamiWorkerClient {
   private worker: Worker | null = null;
   private onLoadedCb?: LoadedCallback;
   private onFrameCb?: FrameCallback;
   private onErrorCb?: ErrorCallback;
+  private onStateChangedCb?: StateChangedCallback;
   private lastAlphaSentTime = 0;
   private measuredLatencyMs = 0;
 
@@ -60,6 +63,11 @@ export class OrigamiWorkerClient {
     this.onErrorCb = cb;
   }
 
+  /** The worker changed the fold progress itself (e.g. settled before a grab). */
+  onStateChanged(cb: StateChangedCallback): void {
+    this.onStateChangedCb = cb;
+  }
+
   private handleMessage(e: MessageEvent<WorkerResponse>): void {
     const data = e.data;
     switch (data.type) {
@@ -72,6 +80,7 @@ export class OrigamiWorkerClient {
           creaseEdges: data.creaseEdges,
           bounds: data.bounds,
           bakedFold: data.bakedFold,
+          exact: data.exact,
         });
         break;
       }
@@ -87,6 +96,11 @@ export class OrigamiWorkerClient {
           stats: data.stats,
           latencyMs: this.measuredLatencyMs,
         });
+        break;
+      }
+
+      case 'STATE_CHANGED': {
+        this.onStateChangedCb?.({ paused: data.paused, alpha: data.alpha });
         break;
       }
 
@@ -110,14 +124,22 @@ export class OrigamiWorkerClient {
       muKinetic?: number;
       bendingCompliance?: number;
       substeps?: number;
-    }
+      enableSelfCollision?: boolean;
+    },
+    exactFold?: ExactFoldMode
   ): void {
     this.postMessage({
       type: 'LOAD',
       fold,
       meshOptions,
       solverOptions,
+      ...(exactFold ? { exactFold } : {}),
     });
+  }
+
+  /** Switch between exact folding and physics for the loaded pattern (reloads it). */
+  setExactFold(mode: ExactFoldMode): void {
+    this.postMessage({ type: 'SET_EXACT_FOLD', mode });
   }
 
   setPhysicsParams(params: {
@@ -130,6 +152,7 @@ export class OrigamiWorkerClient {
     muKinetic?: number;
     bendingCompliance?: number;
     substeps?: number;
+      enableSelfCollision?: boolean;
   }): void {
     this.postMessage({
       type: 'SET_PHYSICS_PARAMS',

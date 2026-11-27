@@ -1,0 +1,187 @@
+{
+  "format": "origami-design",
+  "version": 1,
+  "meta": {
+    "id": "preliminary-base",
+    "title": "Preliminary Base",
+    "author": "Traditional",
+    "description": "The square base most traditional models start from: two folds and two squash folds.",
+    "difficulty": "beginner",
+    "tags": [
+      "base",
+      "squash"
+    ]
+  },
+  "paper": {
+    "width": 1,
+    "height": 1,
+    "front": "#c2410c",
+    "back": "#f8fafc"
+  },
+  "steps": [
+    {
+      "caption": "Fold in half along the diagonal",
+      "hint": "Bring the top-left corner down onto the bottom-right corner.",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            0,
+            0
+          ],
+          [
+            1,
+            1
+          ]
+        ],
+        "moving": [
+          0.2,
+          0.8
+        ],
+        "direction": "valley"
+      }
+    },
+    {
+      "caption": "Fold the triangle in half",
+      "hint": "Bring the left corner over to the top corner.",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            1,
+            0
+          ],
+          [
+            0.5,
+            0.5
+          ]
+        ],
+        "moving": [
+          0.3,
+          0.1
+        ],
+        "direction": "valley"
+      }
+    },
+    {
+      "caption": "Squash the front flap into a square",
+      "hint": "Lift the front flap upright, open its pocket and press it flat into a square.",
+      "action": {
+        "type": "collapse",
+        "fixed": [
+          0.9,
+          0.5
+        ],
+        "creases": [
+          {
+            "from": [
+              0.5,
+              0
+            ],
+            "to": [
+              0.5,
+              0.5
+            ],
+            "fold": "auto"
+          },
+          {
+            "from": [
+              0,
+              0.5
+            ],
+            "to": [
+              0.5,
+              0.5
+            ],
+            "fold": "auto"
+          },
+          {
+            "from": [
+              0,
+              0
+            ],
+            "to": [
+              0.5,
+              0.5
+            ],
+            "fold": "flat"
+          },
+          {
+            "from": [
+              1,
+              0
+            ],
+            "to": [
+              0.5,
+              0.5
+            ],
+            "fold": "flat"
+          }
+        ]
+      }
+    },
+    {
+      "caption": "Turn the model over",
+      "action": {
+        "type": "turnOver"
+      }
+    },
+    {
+      "caption": "Squash the other flap the same way",
+      "hint": "Repeat the squash on this side to finish the square base.",
+      "action": {
+        "type": "collapse",
+        "fixed": [
+          0.7,
+          0.15
+        ],
+        "creases": [
+          {
+            "from": [
+              0.5,
+              0.5
+            ],
+            "to": [
+              1,
+              0.5
+            ],
+            "fold": "auto"
+          },
+          {
+            "from": [
+              0.5,
+              0.5
+            ],
+            "to": [
+              0.5,
+              1
+            ],
+            "fold": "auto"
+          },
+          {
+            "from": [
+              1,
+              1
+            ],
+            "to": [
+              0.5,
+              0.5
+            ],
+            "fold": "flat"
+          },
+          {
+            "from": [
+              1,
+              0
+            ],
+            "to": [
+              0.5,
+              0.5
+            ],
+            "fold": "auto"
+          }
+        ]
+      }
+    }
+  ]
+}

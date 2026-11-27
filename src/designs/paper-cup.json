@@ -1,0 +1,140 @@
+{
+  "format": "origami-design",
+  "version": 1,
+  "meta": {
+    "id": "paper-cup",
+    "title": "Paper Cup",
+    "author": "Traditional",
+    "description": "A cup that really holds water. Good first model: only simple folds.",
+    "difficulty": "beginner",
+    "tags": [
+      "cup",
+      "simple folds"
+    ]
+  },
+  "paper": {
+    "width": 1,
+    "height": 1,
+    "front": "#0e7490",
+    "back": "#f1f5f9"
+  },
+  "steps": [
+    {
+      "caption": "Turn the square so a corner points up",
+      "action": {
+        "type": "rotate",
+        "degrees": 45
+      }
+    },
+    {
+      "caption": "Fold the bottom corner up to the top corner",
+      "hint": "You now have a triangle with the fold along the bottom.",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            -0.20710678118654746,
+            0.5
+          ],
+          [
+            1.2071067811865475,
+            0.5
+          ]
+        ],
+        "moving": [
+          0.5,
+          0.0
+        ],
+        "direction": "valley"
+      }
+    },
+    {
+      "caption": "Fold the left corner across to the right edge",
+      "hint": "Line the top edge of this flap up with the bottom so it is level.",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            0.3786796564403576,
+            0.5
+          ],
+          [
+            0.20710678118654746,
+            0.9142135623730951
+          ]
+        ],
+        "moving": [
+          -0.157107,
+          0.52
+        ],
+        "direction": "valley"
+      }
+    },
+    {
+      "caption": "Fold the right corner across to the left edge",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            0.6213203435596424,
+            0.5
+          ],
+          [
+            0.7928932188134525,
+            0.9142135623730951
+          ]
+        ],
+        "moving": [
+          1.157107,
+          0.52
+        ],
+        "direction": "valley"
+      }
+    },
+    {
+      "caption": "Fold the front top flap down",
+      "hint": "Only the front layer. It covers the corner flaps.",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            0.2,
+            0.9142135623730951
+          ],
+          [
+            0.8,
+            0.9142135623730951
+          ]
+        ],
+        "moving": [
+          0.5,
+          1.1
+        ],
+        "direction": "valley",
+        "layers": "top"
+      }
+    },
+    {
+      "caption": "Fold the back top flap down behind",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            0.2,
+            0.9142135623730951
+          ],
+          [
+            0.8,
+            0.9142135623730951
+          ]
+        ],
+        "moving": [
+          0.5,
+          1.1
+        ],
+        "direction": "mountain",
+        "layers": "all"
+      }
+    }
+  ]
+}

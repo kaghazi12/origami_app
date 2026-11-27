@@ -23,6 +23,10 @@ export interface ContactData {
   depth: number; // thickness - distance > 0
 }
 
+function sq3(x: number, y: number, z: number): number {
+  return x * x + y * y + z * z;
+}
+
 /**
  * Computes closest point on triangle ABC to point P.
  * Returns barycentric coordinates [u, v, w] such that closest Q = u*A + v*B + w*C
@@ -43,7 +47,7 @@ export function closestPointTriangle(
   const d2 = acx * apx + acy * apy + acz * apz;
   if (d1 <= 0.0 && d2 <= 0.0) {
     out[0] = 1.0; out[1] = 0.0; out[2] = 0.0; // Vertex A
-    return Math.hypot(px - ax, py - ay, pz - az);
+    return Math.sqrt(sq3(px - ax, py - ay, pz - az));
   }
 
   // Check vertex B region
@@ -52,7 +56,7 @@ export function closestPointTriangle(
   const d4 = acx * bpx + acy * bpy + acz * bpz;
   if (d3 >= 0.0 && d4 <= d3) {
     out[0] = 0.0; out[1] = 1.0; out[2] = 0.0; // Vertex B
-    return Math.hypot(px - bx, py - by, pz - bz);
+    return Math.sqrt(sq3(px - bx, py - by, pz - bz));
   }
 
   // Check edge AB region
@@ -61,7 +65,7 @@ export function closestPointTriangle(
     const v = d1 / (d1 - d3);
     out[0] = 1.0 - v; out[1] = v; out[2] = 0.0;
     const qx = ax + v * abx, qy = ay + v * aby, qz = az + v * abz;
-    return Math.hypot(px - qx, py - qy, pz - qz);
+    return Math.sqrt(sq3(px - qx, py - qy, pz - qz));
   }
 
   // Check vertex C region
@@ -70,7 +74,7 @@ export function closestPointTriangle(
   const d6 = acx * cpx + acy * cpy + acz * cpz;
   if (d6 >= 0.0 && d5 <= d6) {
     out[0] = 0.0; out[1] = 0.0; out[2] = 1.0; // Vertex C
-    return Math.hypot(px - cx, py - cy, pz - cz);
+    return Math.sqrt(sq3(px - cx, py - cy, pz - cz));
   }
 
   // Check edge AC region
@@ -79,7 +83,7 @@ export function closestPointTriangle(
     const w = d2 / (d2 - d6);
     out[0] = 1.0 - w; out[1] = 0.0; out[2] = w;
     const qx = ax + w * acx, qy = ay + w * acy, qz = az + w * acz;
-    return Math.hypot(px - qx, py - qy, pz - qz);
+    return Math.sqrt(sq3(px - qx, py - qy, pz - qz));
   }
 
   // Check edge BC region
@@ -88,7 +92,7 @@ export function closestPointTriangle(
     const w = (d4 - d3) / ((d4 - d3) + (d5 - d6));
     out[0] = 0.0; out[1] = 1.0 - w; out[2] = w;
     const qx = bx + w * (cx - bx), qy = by + w * (cy - by), qz = bz + w * (cz - bz);
-    return Math.hypot(px - qx, py - qy, pz - qz);
+    return Math.sqrt(sq3(px - qx, py - qy, pz - qz));
   }
 
   // Inside face ABC region
@@ -100,7 +104,7 @@ export function closestPointTriangle(
   const qx = u * ax + v * bx + w * cx;
   const qy = u * ay + v * by + w * cy;
   const qz = u * az + v * bz + w * cz;
-  return Math.hypot(px - qx, py - qy, pz - qz);
+  return Math.sqrt(sq3(px - qx, py - qy, pz - qz));
 }
 
 /**
@@ -127,7 +131,7 @@ export function closestPointsSegments(
 
   if (a <= 1e-12 && e <= 1e-12) {
     outST[0] = 0.0; outST[1] = 0.0;
-    return Math.hypot(rx, ry, rz);
+    return Math.sqrt(sq3(rx, ry, rz));
   }
 
   if (a <= 1e-12) {
@@ -164,7 +168,7 @@ export function closestPointsSegments(
 
   const p1x = ax + s * d1x, p1y = ay + s * d1y, p1z = az + s * d1z;
   const p2x = cx + t * d2x, p2y = cy + t * d2y, p2z = cz + t * d2z;
-  return Math.hypot(p1x - p2x, p1y - p2y, p1z - p2z);
+  return Math.sqrt(sq3(p1x - p2x, p1y - p2y, p1z - p2z));
 }
 
 /**
@@ -248,7 +252,7 @@ export function solveContactsXPBD(
       const tx = dP_x - dNorm * nx;
       const ty = dP_y - dNorm * ny;
       const tz = dP_z - dNorm * nz;
-      const tLen = Math.hypot(tx, ty, tz);
+      const tLen = Math.sqrt(sq3(tx, ty, tz));
 
       if (tLen > 1e-12 && deltaLambda > 0) {
         const fMax = muStatic * deltaLambda;

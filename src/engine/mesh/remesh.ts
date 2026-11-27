@@ -184,6 +184,24 @@ export function canGridHonorCreases(
   const dx = width / nx;
   const dy = height / ny;
 
+  // The grid covers the bounding rectangle, so the paper must be that rectangle: every boundary
+  // edge on one of its sides, together running all the way round. (A triangle or hexagon sheet
+  // whose creases happen to sit on the grid would otherwise gain paper that isn't there.)
+  let boundaryLength = 0;
+  for (let eIdx = 0; eIdx < fold.edges_vertices.length; eIdx++) {
+    if (fold.edges_assignment[eIdx] !== 'B') continue;
+    const [u, v] = fold.edges_vertices[eIdx];
+    const p = fold.vertices_coords[u], q = fold.vertices_coords[v];
+    const onSide =
+      (Math.abs(p[0] - minX) < eps && Math.abs(q[0] - minX) < eps) ||
+      (Math.abs(p[0] - maxX) < eps && Math.abs(q[0] - maxX) < eps) ||
+      (Math.abs(p[1] - minY) < eps && Math.abs(q[1] - minY) < eps) ||
+      (Math.abs(p[1] - maxY) < eps && Math.abs(q[1] - maxY) < eps);
+    if (!onSide) return false;
+    boundaryLength += Math.hypot(q[0] - p[0], q[1] - p[1]);
+  }
+  if (Math.abs(boundaryLength - 2 * (width + height)) > 1e-6 * (width + height)) return false;
+
   for (let eIdx = 0; eIdx < fold.edges_vertices.length; eIdx++) {
     const a = fold.edges_assignment[eIdx];
     if (a === 'B') continue;

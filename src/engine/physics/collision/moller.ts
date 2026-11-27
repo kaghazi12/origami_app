@@ -34,11 +34,17 @@ function edgeCheck2D(
   c: [number, number],
   p: [number, number]
 ): boolean {
-  // Check if p is on same side of line ab as c
+  // Is p strictly on the same side of line ab as c? The tolerance is relative to the triangle's
+  // size: an absolute tolerance on the product of two areas (the old `cp1 * cp2 >= -1e-6`)
+  // accepted almost any point for triangles a few hundredths across.
   const cp1 = (b[0] - a[0]) * (p[1] - a[1]) - (b[1] - a[1]) * (p[0] - a[0]);
   const cp2 = (b[0] - a[0]) * (c[1] - a[1]) - (b[1] - a[1]) * (c[0] - a[0]);
-  return cp1 * cp2 >= -EPSILON;
+  if (cp2 === 0) return false;
+  return Math.sign(cp2) * cp1 > REL_EPS * Math.abs(cp2);
 }
+
+/** Relative tolerance for the 2D (coplanar) tests: touching at an edge or corner is not overlap. */
+const REL_EPS = 1e-9;
 
 function pointInTriangle2D(
   p: [number, number],
@@ -63,10 +69,12 @@ function segIntersect2D(
   const d2 = (q2[0] - p2[0]) * (q1[1] - p2[1]) - (q2[1] - p2[1]) * (q1[0] - p2[0]);
   const d3 = (q1[0] - p1[0]) * (p2[1] - p1[1]) - (q1[1] - p1[1]) * (p2[0] - p1[0]);
   const d4 = (q1[0] - p1[0]) * (q2[1] - p1[1]) - (q1[1] - p1[1]) * (q2[0] - p1[0]);
+  // tolerance scaled by the segments' lengths (these are areas)
+  const t = REL_EPS * Math.hypot(q1[0] - p1[0], q1[1] - p1[1]) * Math.hypot(q2[0] - p2[0], q2[1] - p2[1]);
 
   return (
-    ((d1 > EPSILON && d2 < -EPSILON) || (d1 < -EPSILON && d2 > EPSILON)) &&
-    ((d3 > EPSILON && d4 < -EPSILON) || (d3 < -EPSILON && d4 > EPSILON))
+    ((d1 > t && d2 < -t) || (d1 < -t && d2 > t)) &&
+    ((d3 > t && d4 < -t) || (d3 < -t && d4 > t))
   );
 }
 

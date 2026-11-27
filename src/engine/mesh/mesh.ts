@@ -10,6 +10,8 @@ export interface MeshOptions {
   facetStiffness?: number;
   /** Maximum edge length for quality remeshing (e.g. 0.1) */
   targetEdgeLength?: number;
+  /** Refine patterns the grid can't follow by midpoint subdivision (default true). */
+  refine?: boolean;
 }
 
 /**
@@ -37,8 +39,7 @@ export function createMeshFromFold(fold: FoldFormat, options: MeshOptions = {}):
     };
   }
 
-  const numVertices = workingFold.vertices_coords.length;
-  const allTriangles: [number, number, number][] = [];
+  let allTriangles: [number, number, number][] = [];
 
   if (workingFold.faces_vertices && workingFold.faces_vertices.length > 0) {
     for (const face of workingFold.faces_vertices) {
@@ -48,6 +49,23 @@ export function createMeshFromFold(fold: FoldFormat, options: MeshOptions = {}):
   } else {
     throw new Error('createMeshFromFold: unable to extract faces from crease pattern');
   }
+
+  // Flat folds the regular grid can't follow (any crease angle, any paper outline) are refined by
+  // splitting triangles at their edge midpoints, so faces can flex on the way to flat instead of
+  // staying one rigid triangle: twists, for example, can't collapse without that. 3D targets keep
+  // their faces rigid: a target with consistent angles is reached by rigid faces, and flexible
+  // walls (a box's sides meeting edge to edge) only press into each other.
+  const flatTarget = workingFold.edges_assignment.every((a, i) => {
+    if (a !== 'M' && a !== 'V') return true;
+    const d = workingFold.edges_foldAngle?.[i];
+    return d === undefined || Math.abs(Math.abs(d) - 180) < 1e-6;
+  });
+  if (flatTarget && options.targetEdgeLength && options.targetEdgeLength > 0 && options.refine !== false) {
+    const refined = refineByMidpoints(workingFold, allTriangles, options.targetEdgeLength);
+    workingFold = refined.fold;
+    allTriangles = refined.triangles;
+  }
+  const numVertices = workingFold.vertices_coords.length;
 
   // 3. Extract bars, hinges, and triangle index buffer
   const topology: TopologyResult = extractTopology(
@@ -83,6 +101,73 @@ export function createMeshFromFold(fold: FoldFormat, options: MeshOptions = {}):
     indices: topology.indices,
     bars: topology.bars,
     hinges: topology.hinges,
+  };
+}
+
+/** Most triangles midpoint refinement may produce. */
+const MAX_REFINED_TRIANGLES = 4000;
+/**
+ * Refine only while some edge is longer than this many target lengths. Finer than this made
+ * stacked flat folds too floppy for the contacts (layers pushed through each other).
+ */
+const REFINE_FACTOR = 3;
+
+/**
+ * Split every triangle into four at its edge midpoints until no edge is longer than 1.5 x
+ * targetEdgeLength (or the triangle budget runs out). Crease and boundary edges are split too and
+ * keep their assignment and fold angle, so the pattern is unchanged; only the paper gets finer.
+ */
+export function refineByMidpoints(
+  fold: FoldFormat,
+  triangles: [number, number, number][],
+  targetEdgeLength: number
+): { fold: FoldFormat; triangles: [number, number, number][] } {
+  let coords = fold.vertices_coords.map((c) => [c[0], c[1], c[2] ?? 0]) as [number, number, number][];
+  let tris = triangles;
+  let edges = fold.edges_vertices.map((e) => [e[0], e[1]] as [number, number]);
+  let assign = [...fold.edges_assignment];
+  let angles = fold.edges_assignment.map((a, i) => fold.edges_foldAngle?.[i] ?? (a === 'V' ? 180 : a === 'M' ? -180 : 0));
+  const len = (u: number, v: number) => Math.hypot(coords[u][0] - coords[v][0], coords[u][1] - coords[v][1], coords[u][2] - coords[v][2]);
+  for (let level = 0; level < 6; level++) {
+    let longest = 0;
+    for (const [a, b, c] of tris) longest = Math.max(longest, len(a, b), len(b, c), len(c, a));
+    if (longest <= REFINE_FACTOR * targetEdgeLength || tris.length * 4 > MAX_REFINED_TRIANGLES) break;
+    const mid = new Map<string, number>();
+    const m = (u: number, v: number) => {
+      const k = u < v ? `${u}_${v}` : `${v}_${u}`;
+      let i = mid.get(k);
+      if (i === undefined) {
+        i = coords.length;
+        coords.push([(coords[u][0] + coords[v][0]) / 2, (coords[u][1] + coords[v][1]) / 2, (coords[u][2] + coords[v][2]) / 2]);
+        mid.set(k, i);
+      }
+      return i;
+    };
+    const next: [number, number, number][] = [];
+    for (const [a, b, c] of tris) {
+      const ab = m(a, b), bc = m(b, c), ca = m(c, a);
+      next.push([a, ab, ca], [ab, b, bc], [ca, bc, c], [ab, bc, ca]);
+    }
+    const e2: [number, number][] = [], a2: typeof assign = [], g2: number[] = [];
+    edges.forEach(([u, v], i) => {
+      const k = u < v ? `${u}_${v}` : `${v}_${u}`;
+      const w = mid.get(k);
+      if (w === undefined) { e2.push([u, v]); a2.push(assign[i]); g2.push(angles[i]); return; }
+      e2.push([u, w], [w, v]); a2.push(assign[i], assign[i]); g2.push(angles[i], angles[i]);
+    });
+    tris = next; edges = e2; assign = a2; angles = g2;
+  }
+  const flat2D = coords.every((c) => c[2] === 0);
+  return {
+    fold: {
+      ...fold,
+      vertices_coords: (flat2D ? coords.map((c) => [c[0], c[1]]) : coords) as FoldFormat['vertices_coords'],
+      edges_vertices: edges,
+      edges_assignment: assign,
+      edges_foldAngle: angles,
+      faces_vertices: undefined,
+    },
+    triangles: tris,
   };
 }
 

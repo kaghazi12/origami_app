@@ -1,0 +1,114 @@
+{
+ "file_spec": 1.1,
+ "file_creator": "origami_app scripts/generate-test-folds.ts",
+ "file_title": "Rabbit Ear on a Scalene Triangle",
+ "file_description": "A triangle of paper with angles 47, 61 and 72 degrees: the three angle bisectors meet at the incentre, and a fourth crease runs from there at right angles to one side. Folds flat into the classic rabbit ear.",
+ "file_classes": [
+  "singleModel"
+ ],
+ "frame_title": "Crease pattern",
+ "frame_classes": [
+  "creasePattern"
+ ],
+ "frame_attributes": [
+  "2D"
+ ],
+ "vertices_coords": [
+  [
+   0.575319396411,
+   0.250155993115
+  ],
+  [
+   0,
+   0
+  ],
+  [
+   1,
+   0
+  ],
+  [
+   0.62718586722,
+   0.672574499376
+  ],
+  [
+   0.575319396411,
+   0
+  ]
+ ],
+ "edges_vertices": [
+  [
+   0,
+   1
+  ],
+  [
+   0,
+   2
+  ],
+  [
+   0,
+   3
+  ],
+  [
+   0,
+   4
+  ],
+  [
+   1,
+   4
+  ],
+  [
+   4,
+   2
+  ],
+  [
+   2,
+   3
+  ],
+  [
+   3,
+   1
+  ]
+ ],
+ "edges_assignment": [
+  "V",
+  "V",
+  "V",
+  "M",
+  "B",
+  "B",
+  "B",
+  "B"
+ ],
+ "edges_foldAngle": [
+  180,
+  180,
+  180,
+  -180,
+  0,
+  0,
+  0,
+  0
+ ],
+ "faces_vertices": [
+  [
+   0,
+   1,
+   4
+  ],
+  [
+   1,
+   0,
+   3
+  ],
+  [
+   0,
+   2,
+   3
+  ],
+  [
+   2,
+   0,
+   4
+  ]
+ ]
+}

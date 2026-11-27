@@ -1,0 +1,158 @@
+{
+ "file_spec": 1.1,
+ "file_creator": "origami_app scripts/generate-test-folds.ts",
+ "file_title": "Generic Degree-4 Vertex",
+ "file_description": "One corner with four creases at irregular angles (sectors 37, 101, 143 and 79 degrees; 37 + 143 = 101 + 79 = 180). Partly folded rigidly: one crease held at 63.7 degrees and the other three solved so the corner closes up exactly.",
+ "file_classes": [
+  "singleModel"
+ ],
+ "frame_title": "Crease pattern, partly folded target",
+ "frame_classes": [
+  "creasePattern"
+ ],
+ "frame_attributes": [
+  "2D"
+ ],
+ "vertices_coords": [
+  [
+   0.43,
+   0.56
+  ],
+  [
+   1,
+   0.734266488431
+  ],
+  [
+   0.749678712322,
+   1
+  ],
+  [
+   0,
+   0.760512293007
+  ],
+  [
+   0.72775728173,
+   0
+  ],
+  [
+   0,
+   0
+  ],
+  [
+   1,
+   0
+  ],
+  [
+   1,
+   1
+  ],
+  [
+   0,
+   1
+  ]
+ ],
+ "edges_vertices": [
+  [
+   0,
+   1
+  ],
+  [
+   0,
+   2
+  ],
+  [
+   0,
+   3
+  ],
+  [
+   0,
+   4
+  ],
+  [
+   5,
+   4
+  ],
+  [
+   4,
+   6
+  ],
+  [
+   6,
+   1
+  ],
+  [
+   1,
+   7
+  ],
+  [
+   7,
+   2
+  ],
+  [
+   2,
+   8
+  ],
+  [
+   8,
+   3
+  ],
+  [
+   3,
+   5
+  ]
+ ],
+ "edges_assignment": [
+  "M",
+  "V",
+  "V",
+  "V",
+  "B",
+  "B",
+  "B",
+  "B",
+  "B",
+  "B",
+  "B",
+  "B"
+ ],
+ "edges_foldAngle": [
+  -63.7,
+  95.164321969726,
+  63.700000000053,
+  95.164321969851,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0,
+  0
+ ],
+ "faces_vertices": [
+  [
+   0,
+   1,
+   7,
+   2
+  ],
+  [
+   1,
+   0,
+   4,
+   6
+  ],
+  [
+   0,
+   2,
+   8,
+   3
+  ],
+  [
+   0,
+   3,
+   5,
+   4
+  ]
+ ]
+}

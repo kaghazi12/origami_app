@@ -1,0 +1,75 @@
+# Origami App
+
+A web app where people watch origami designs fold in 3D, step by step, and interact with the paper. The long-term goal is a social site for sharing designs (see `docs/ROADMAP.md`).
+
+## Stack
+
+- React 19 + TypeScript, built with Vite 6
+- Tailwind CSS v4 (via `@tailwindcss/vite`; config lives in `src/index.css`, there is no `tailwind.config.js`)
+- three.js through `@react-three/fiber` and `@react-three/drei`
+- Icons: `lucide-react`
+- Engine tests: Vitest, in `origami-fold-engine/` (a separate package that tests code in the root `src/engine/`)
+
+## Commands
+
+```bash
+npm run dev            # dev server on http://localhost:5173
+npm run build          # tsc + vite build (run this to typecheck the app)
+npm run test:engine    # full engine test suite (Vitest)
+```
+
+## Layout
+
+```
+src/
+  App.tsx                      picks the page from the URL hash (router.ts: #/, #/learn, #/crease-pattern)
+  index.css                    Tailwind import, design tokens (@theme), base styles
+  theme.ts                     the same colours for three.js and SVG (keep in sync with index.css)
+  pages/                       LandingPage, LearnPage, CreasePatternPage
+  components/
+    ui/                        shared kit: Button, IconButton, SegmentedControl, Scrubber, Picker, Switch, Callout, Toast, Tooltip, Thumbnails
+    shell/                     TopBar and Wordmark, used on every page
+    prototype/                 DesignViewer3D (Learn mode and the landing hero)
+    modern/                    OrigamiModernCanvas (Crease pattern mode: physics, grab, pin)
+  designs/                     bundled designs (.json step designs, .fold crease patterns); index.ts is the catalogue
+  engine/
+    design/                    exact step folding, layer order, crease-pattern folding, FOLD export
+    fold/                      FOLD parsing, unfolding
+    mesh/  physics/            bar-and-hinge physics (runs in worker/)
+origami-fold-engine/tests/     engine tests
+docs/                          ROADMAP.md, ENGINE_AUDIT.md, screenshots
+```
+
+## The two modes
+
+- **Learn (step-by-step):** for beginners. A design is a list of steps with captions and hints, played one fold at a time.
+- **Crease pattern (advanced):** for experienced folders. Open any `.fold` file, fold it exactly, inspect it, grab the paper.
+
+Both share one shell (top bar, 288px sidebar, viewer, transport bar) and one visual language. They still use two different 3D viewer components (roadmap step 1).
+
+## Frontend and design work
+
+**Read `.claude/skills/frontend-design/SKILL.md` before any UI change**, including small ones such as adding a button. It sets the visual direction, the design tokens, the component rules and the review checklist. Build new UI from `src/components/ui/` rather than styling raw elements.
+
+The rules that apply everywhere:
+
+- Use the tokens defined in `src/index.css` (`@theme`). Don't use raw Tailwind palette classes (`slate-800`, `indigo-600`, `gray-200`) or hex values in components.
+- No emoji in the UI, no gradients, no glassmorphism, no glowing shadows, no `alert()`.
+- Write UI text for folders, not engineers: "Folding…", not "Web Worker Bar-and-Hinge"; "Show creases", not "Crease visibility toggle". Keep engine numbers (vertex count, residual force, stiffness) out of sight, behind a developer panel.
+- Pull a shared piece into `src/components/ui/` once it's used in both modes.
+- Engine and physics numbers in Crease pattern mode live in the sidebar's collapsed **Developer** panel. Keep them there.
+
+## Engine conventions
+
+- Exact folding is the source of truth. Physics is only for small moves, relaxing the view and grabbing. Don't use simulation to reach a folded state.
+- Every FOLD file goes through `prepareFold` (`src/engine/fold/prepare.ts`) before the engine sees it: unit size, multi-frame files, faces rebuilt when they don't match the creases, crossing creases joined, and a report of what's impossible about the pattern (shown in the sidebar's File check). Never feed raw file JSON to the mesh or worker.
+- Physics folds are driven by `FoldDriver` (`src/engine/physics/foldDriver.ts`): the fold always reaches the slider value, then the paper settles and stops. Plasticity stays off for loaded patterns, and self-collision stays on (also when grabbing an exact fold).
+- `origami-fold-engine/tests/fold_files_robustness.test.ts` folds every bundled `.fold` file and fails if one stalls, never stops, or passes paper through paper. New test files named `NN_name.fold` in `src/designs/` are picked up by it and by the app's picker automatically. The current ones (`01_`–`12_`) are generated and verified by `npm run generate:test-folds` (`scripts/generate-test-folds.ts`); edit the script, not the JSON. The original broken versions live in `origami-fold-engine/fixtures/invalid/` and test how broken files are reported.
+- Engine code in `src/engine/` must not import React or anything from `components/`.
+- Add or update a test in `origami-fold-engine/tests/` for any engine behaviour change, and run `npm run test:engine`.
+
+## Git
+
+- Main work happens on `prototype-engine`. `muhammad-ali` follows it.
+- `test images/` is local only and must never be committed.
+- Commit or push only when asked.

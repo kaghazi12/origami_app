@@ -1,0 +1,588 @@
+{
+ "format": "origami-design",
+ "version": 1,
+ "meta": {
+  "id": "crane",
+  "title": "Traditional Crane (Orizuru)",
+  "author": "Traditional",
+  "description": "The classic paper crane: square base, two petal folds to the bird base, then inside reverse folds for the neck, tail and head. (Prototype: the legs are not thinned and the wings are not spread yet.)",
+  "difficulty": "intermediate",
+  "tags": [
+   "crane",
+   "bird base",
+   "petal fold",
+   "reverse fold"
+  ]
+ },
+ "paper": {
+  "width": 1,
+  "height": 1,
+  "front": "#c2410c",
+  "back": "#f8fafc"
+ },
+ "steps": [
+  {
+   "caption": "Fold in half along the diagonal",
+   "hint": "Bring the top-left corner down onto the bottom-right corner.",
+   "action": {
+    "type": "fold",
+    "line": [
+     [
+      0,
+      0
+     ],
+     [
+      1,
+      1
+     ]
+    ],
+    "moving": [
+     0.2,
+     0.8
+    ],
+    "direction": "valley"
+   }
+  },
+  {
+   "caption": "Fold the triangle in half",
+   "hint": "Bring the left corner over to the top corner.",
+   "action": {
+    "type": "fold",
+    "line": [
+     [
+      1,
+      0
+     ],
+     [
+      0.5,
+      0.5
+     ]
+    ],
+    "moving": [
+     0.3,
+     0.1
+    ],
+    "direction": "valley"
+   }
+  },
+  {
+   "caption": "Squash the front flap into a square",
+   "hint": "Lift the front flap upright, open its pocket and press it flat into a square.",
+   "action": {
+    "type": "collapse",
+    "fixed": [
+     0.9,
+     0.5
+    ],
+    "creases": [
+     {
+      "from": [
+       0.5,
+       0
+      ],
+      "to": [
+       0.5,
+       0.5
+      ],
+      "fold": "auto"
+     },
+     {
+      "from": [
+       0,
+       0.5
+      ],
+      "to": [
+       0.5,
+       0.5
+      ],
+      "fold": "auto"
+     },
+     {
+      "from": [
+       0,
+       0
+      ],
+      "to": [
+       0.5,
+       0.5
+      ],
+      "fold": "flat"
+     },
+     {
+      "from": [
+       1,
+       0
+      ],
+      "to": [
+       0.5,
+       0.5
+      ],
+      "fold": "flat"
+     }
+    ]
+   }
+  },
+  {
+   "caption": "Turn the model over",
+   "action": {
+    "type": "turnOver"
+   }
+  },
+  {
+   "caption": "Squash the other flap the same way",
+   "hint": "Repeat the squash on this side to finish the square base.",
+   "action": {
+    "type": "collapse",
+    "fixed": [
+     0.7,
+     0.15
+    ],
+    "creases": [
+     {
+      "from": [
+       0.5,
+       0.5
+      ],
+      "to": [
+       1,
+       0.5
+      ],
+      "fold": "auto"
+     },
+     {
+      "from": [
+       0.5,
+       0.5
+      ],
+      "to": [
+       0.5,
+       1
+      ],
+      "fold": "auto"
+     },
+     {
+      "from": [
+       1,
+       1
+      ],
+      "to": [
+       0.5,
+       0.5
+      ],
+      "fold": "flat"
+     },
+     {
+      "from": [
+       1,
+       0
+      ],
+      "to": [
+       0.5,
+       0.5
+      ],
+      "fold": "auto"
+     }
+    ]
+   }
+  },
+  {
+   "caption": "Rotate the base so the closed point is at the top",
+   "action": {
+    "type": "rotate",
+    "degrees": 45
+   }
+  },
+  {
+   "caption": "Fold the lower left edge of the top flap to the centre line",
+   "hint": "Crease well, then unfold.",
+   "action": {
+    "type": "fold",
+    "line": [
+     [
+      0.75,
+      -0.103553390593
+     ],
+     [
+      0.542893218813,
+      0.396446609407
+     ]
+    ],
+    "moving": [
+     0.467157287525,
+     0.25
+    ],
+    "direction": "valley",
+    "layers": "top"
+   }
+  },
+  {
+   "caption": "Unfold",
+   "action": {
+    "type": "unfold"
+   }
+  },
+  {
+   "caption": "Fold the lower right edge of the top flap to the centre line",
+   "action": {
+    "type": "fold",
+    "line": [
+     [
+      0.75,
+      -0.103553390593
+     ],
+     [
+      0.957106781187,
+      0.396446609407
+     ]
+    ],
+    "moving": [
+     1.032842712475,
+     0.25
+    ],
+    "direction": "valley",
+    "layers": "top"
+   }
+  },
+  {
+   "caption": "Unfold",
+   "action": {
+    "type": "unfold"
+   }
+  },
+  {
+   "caption": "Fold the top triangle down along the line joining the creases",
+   "action": {
+    "type": "fold",
+    "line": [
+     [
+      0.542893218813,
+      0.396446609407
+     ],
+     [
+      0.957106781187,
+      0.396446609407
+     ]
+    ],
+    "moving": [
+     0.785355339059,
+     0.515165042945
+    ],
+    "direction": "valley",
+    "layers": "top"
+   }
+  },
+  {
+   "caption": "Unfold",
+   "action": {
+    "type": "unfold"
+   }
+  },
+  {
+   "caption": "Petal fold",
+   "hint": "Lift the bottom corner of the top layer up along the horizontal crease. The sides fold in along the kite creases and meet at the centre.",
+   "action": {
+    "type": "collapse",
+    "fixed": [
+     0.3,
+     0.2
+    ],
+    "creases": [
+     {
+      "from": [
+       0.5,
+       0.792893218813
+      ],
+      "to": [
+       0.792893218813,
+       0.5
+      ],
+      "fold": "mountain"
+     },
+     {
+      "from": [
+       1,
+       1
+      ],
+      "to": [
+       0.5,
+       0.792893218813
+      ],
+      "fold": "valley"
+     },
+     {
+      "from": [
+       1,
+       1
+      ],
+      "to": [
+       0.792893218813,
+       0.5
+      ],
+      "fold": "valley"
+     },
+     {
+      "from": [
+       0,
+       1
+      ],
+      "to": [
+       0.5,
+       0.792893218813
+      ],
+      "fold": "valley"
+     },
+     {
+      "from": [
+       1,
+       0
+      ],
+      "to": [
+       0.792893218813,
+       0.5
+      ],
+      "fold": "valley"
+     },
+     {
+      "from": [
+       0.5,
+       0.792893218813
+      ],
+      "to": [
+       0.5,
+       1
+      ],
+      "fold": "flat"
+     },
+     {
+      "from": [
+       0.792893218813,
+       0.5
+      ],
+      "to": [
+       1,
+       0.5
+      ],
+      "fold": "flat"
+     }
+    ]
+   }
+  },
+  {
+   "caption": "Turn over",
+   "action": {
+    "type": "turnOver"
+   }
+  },
+  {
+   "caption": "Repeat behind: Fold the lower left edge of the top flap to the centre line",
+   "hint": "Crease well, then unfold.",
+   "action": {
+    "type": "fold",
+    "line": [
+     [
+      0.75,
+      -0.103553390593
+     ],
+     [
+      0.542893218813,
+      0.396446609407
+     ]
+    ],
+    "moving": [
+     0.467157287525,
+     0.25
+    ],
+    "direction": "valley",
+    "layers": "top"
+   }
+  },
+  {
+   "caption": "Unfold",
+   "action": {
+    "type": "unfold"
+   }
+  },
+  {
+   "caption": "Repeat behind: Fold the lower right edge of the top flap to the centre line",
+   "action": {
+    "type": "fold",
+    "line": [
+     [
+      0.75,
+      -0.103553390593
+     ],
+     [
+      0.957106781187,
+      0.396446609407
+     ]
+    ],
+    "moving": [
+     1.032842712475,
+     0.25
+    ],
+    "direction": "valley",
+    "layers": "top"
+   }
+  },
+  {
+   "caption": "Unfold",
+   "action": {
+    "type": "unfold"
+   }
+  },
+  {
+   "caption": "Repeat behind: Petal fold",
+   "hint": "Lift the bottom corner of the top layer up along the horizontal crease. The sides fold in along the kite creases and meet at the centre.",
+   "action": {
+    "type": "collapse",
+    "fixed": [
+     0.6,
+     0.55
+    ],
+    "creases": [
+     {
+      "from": [
+       0.207106781187,
+       0.5
+      ],
+      "to": [
+       0.5,
+       0.207106781187
+      ],
+      "fold": "mountain"
+     },
+     {
+      "from": [
+       0,
+       0
+      ],
+      "to": [
+       0.207106781187,
+       0.5
+      ],
+      "fold": "valley"
+     },
+     {
+      "from": [
+       0,
+       0
+      ],
+      "to": [
+       0.5,
+       0.207106781187
+      ],
+      "fold": "valley"
+     },
+     {
+      "from": [
+       0,
+       1
+      ],
+      "to": [
+       0.207106781187,
+       0.5
+      ],
+      "fold": "valley"
+     },
+     {
+      "from": [
+       1,
+       0
+      ],
+      "to": [
+       0.5,
+       0.207106781187
+      ],
+      "fold": "valley"
+     },
+     {
+      "from": [
+       0.207106781187,
+       0.5
+      ],
+      "to": [
+       0,
+       0.5
+      ],
+      "fold": "flat"
+     },
+     {
+      "from": [
+       0.5,
+       0.207106781187
+      ],
+      "to": [
+       0.5,
+       0
+      ],
+      "fold": "flat"
+     }
+    ]
+   }
+  },
+  {
+   "caption": "Inside reverse fold the left point up to make the neck",
+   "hint": "Open the layers of the lower left point slightly and push it up between them.",
+   "action": {
+    "type": "reverseFold",
+    "line": [
+     [
+      0.75,
+      0.396446609407
+     ],
+     [
+      0.45,
+      0.272182540695
+     ]
+    ],
+    "moving": [
+     0.73,
+     0.05
+    ],
+    "mode": "inside"
+   }
+  },
+  {
+   "caption": "Inside reverse fold the right point up to make the tail",
+   "action": {
+    "type": "reverseFold",
+    "line": [
+     [
+      0.75,
+      0.396446609407
+     ],
+     [
+      1.05,
+      0.272182540695
+     ]
+    ],
+    "moving": [
+     0.77,
+     0.05
+    ],
+    "mode": "inside"
+   }
+  },
+  {
+   "caption": "Inside reverse fold the tip of the neck to make the head",
+   "action": {
+    "type": "reverseFold",
+    "line": [
+     [
+      0.536263805167,
+      0.641168321646
+     ],
+     [
+      0.380300739818,
+      0.676882775959
+     ]
+    ],
+    "moving": [
+     0.413310881158,
+     0.725188786037
+    ],
+    "mode": "inside"
+   }
+  }
+ ]
+}
