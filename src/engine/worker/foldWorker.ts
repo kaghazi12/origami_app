@@ -9,6 +9,7 @@ import { CreaseEdgeInfo, ExactFoldInfo, ExactFoldMode, WorkerFrameStats, WorkerR
 import { extractPlanarFaces } from '../fold/faces';
 import { ExactFoldPlayer, foldCreasePattern, withLayerGap } from '../design/creasePattern';
 import { computeDihedralAngle } from '../physics/hinges';
+import { FoldDriver } from '../physics/foldDriver';
 
 /** Patterns with more folded creases than this are folded exactly in 'auto' mode. */
 const EXACT_AUTO_MIN_CREASES = 24;
@@ -104,13 +105,28 @@ function releaseExactToPhysics() {
   }
   mesh.velocities.fill(0);
   targetAlpha = currentAlpha;
+  driver?.jumpTo(currentAlpha);
   if (solver instanceof XPBDSolver) {
-    solver.setSelfCollision(false);
+    // Keep self-collision on, so grabbed layers can't pass through each other. The stacked layers
+    // of the exact fold sit one layer gap apart, so the contact thickness must fit inside that gap
+    // or every layer would be pushed apart at once.
+    solver.paperThickness = Math.min(solver.paperThickness, exactLayerGap() * 0.8);
+    // Search for contacts only a few thicknesses out. The default radius (0.05 of the sheet) is
+    // deeper than a whole stack of hundreds of layers, so every triangle was tested against
+    // nearly every other (seconds per frame on large patterns).
+    solver.setSelfCollision(true, Math.max(solver.paperThickness * 4, 1e-4));
     solver.setTable(false);
     solver.setGravity(false);
   }
   parkedExactPlayer = exactPlayer;
   exactPlayer = null;
+}
+
+/** The solver's default paper thickness for a mesh: 0.2% of the sheet width. */
+function defaultThickness(m: TriMesh): number {
+  let x0 = Infinity, x1 = -Infinity;
+  for (let i = 0; i < m.numVertices; i++) { x0 = Math.min(x0, m.positions[i * 3]); x1 = Math.max(x1, m.positions[i * 3]); }
+  return (x1 > x0 ? x1 - x0 : 1) * 0.002;
 }
 
 /** Back from grabbing to the exact fold (restores the user's physics settings for later). */
@@ -123,7 +139,8 @@ function resumeExactFold() {
   solver.setFixedVertices?.(new Set());
   if (solver instanceof XPBDSolver) {
     const p = currentPhysicsParams ?? {};
-    solver.setSelfCollision(p.enableSelfCollision ?? false);
+    solver.paperThickness = p.paperThickness ?? (solver.mesh.numVertices ? defaultThickness(solver.mesh) : solver.paperThickness);
+    solver.setSelfCollision(p.enableSelfCollision ?? true, Math.max(0.05, solver.paperThickness * 2));
     solver.setTable(p.enableTable ?? false, p.paperThickness ?? solver.paperThickness, p.tableZ ?? 0);
     solver.setGravity(p.enableGravity ?? false, p.gravity ?? solver.gravity);
   }
@@ -165,9 +182,34 @@ function prepareExactFold(fold: FoldFormat, mode: ExactFoldMode): { player: Exac
   }
 }
 
+/**
+ * The physics solver for a crease pattern. Plasticity is off: it moved every crease's rest angle
+ * toward wherever the paper happened to be, so folds drifted away from the file's angles and kept
+ * moving after 100%. 20 substeps keep stacked layers from crossing (10 let a few through).
+ */
+function buildSolver(m: TriMesh, p: any): XPBDSolver {
+  return new XPBDSolver(m, {
+    substeps: p.substeps ?? 20,
+    iterations: 2,
+    velocityDamping: 0.995,
+    enableTable: p.enableTable ?? false,
+    tableZ: p.tableZ ?? 0.0,
+    paperThickness: p.paperThickness,
+    enableGravity: p.enableGravity ?? false,
+    gravity: p.gravity ?? 1.0,
+    muStatic: p.muStatic ?? 0.5,
+    muKinetic: p.muKinetic ?? 0.4,
+    bendingCompliance: p.bendingCompliance,
+    enablePlasticity: false,
+    enableSelfCollision: p.enableSelfCollision ?? true,
+  });
+}
+
 // State in Worker
 let mesh: TriMesh | null = null;
 let solver: FoldSolver | null = null;
+/** Moves the fold toward the slider, then settles and stops the paper (physics mode). */
+let driver: FoldDriver | null = null;
 let currentFold: FoldFormat | null = null;
 let currentMeshOptions: any = null;
 let currentPhysicsParams: any = {};
@@ -211,10 +253,13 @@ function getRecycledBuffer(byteLength: number): ArrayBuffer {
 
 let restFrameCount = 0;
 let isSleeping = false;
+/** The last frame before the paper stopped wasn't sent (backpressure); send it on RETURN_BUFFER. */
+let finalFramePending = false;
 
 function wakeFromSleep() {
   restFrameCount = 0;
   isSleeping = false;
+  driver?.wake();
   isConverged = false;
   startLoop();
 }
@@ -250,74 +295,46 @@ function runPhysicsTick() {
     return;
   }
 
-  // Adaptive Continuation: advance currentAlpha only as fast as solver keeps strain strictly below 4%
-  const currentStrain = solver.getMaxStrain();
+  // The user is holding the paper: never damp extra or freeze while they drag or pin.
+  const anySolver = solver as any;
+  const hasActiveDrag =
+    (anySolver.barycentricDrag !== null && anySolver.barycentricDrag !== undefined) ||
+    (anySolver.dragTargets && anySolver.dragTargets.size > 0) ||
+    (anySolver.barycentricPins && anySolver.barycentricPins.length > 0) ||
+    (anySolver.fixedVertices && anySolver.fixedVertices.size > 0);
 
-  if (Math.abs(currentAlpha - targetAlpha) > 1e-5) {
-    const strainThreshold = 0.04;
-    if (currentStrain < strainThreshold) {
-      const strainMargin = Math.max(0.1, 1.0 - currentStrain / strainThreshold);
-      const alphaSlewRate = 0.025 * strainMargin;
-      if (currentAlpha < targetAlpha) {
-        currentAlpha = Math.min(targetAlpha, currentAlpha + alphaSlewRate);
-      } else {
-        currentAlpha = Math.max(targetAlpha, currentAlpha - alphaSlewRate);
-      }
-      rampRestAngles(mesh, currentAlpha);
-    }
+  if (!driver || driver.mesh !== mesh) {
+    driver = new FoldDriver(mesh, solver);
+    driver.jumpTo(currentAlpha);
   }
+  driver.setSolver(solver);
+  if (Math.abs(driver.target - targetAlpha) > 1e-9) driver.setTarget(targetAlpha);
 
-  // Run physics steps for this tick
   const tStep0 = performance.now();
-  const stepResult = solver.step(0.016);
-  pe = stepResult.potentialEnergy;
-  ke = stepResult.kineticEnergy;
-  substeps = 1;
+  driver.tick(0.016, hasActiveDrag);
+  currentAlpha = driver.alpha;
   stepCounter++;
+  substeps = 1;
+  ke = solver.getKineticEnergy();
   const stepDurationMs = performance.now() - tStep0;
-
-  // Max vertex speed across mesh
-  let maxSpeed = 0;
-  const vel = mesh.velocities;
-  for (let i = 0; i < mesh.numVertices; i++) {
-    const vx = vel[i * 3 + 0];
-    const vy = vel[i * 3 + 1];
-    const vz = vel[i * 3 + 2];
-    const s = Math.hypot(vx, vy, vz);
-    if (s > maxSpeed) maxSpeed = s;
-  }
 
   const maxResForce = solver.getMaxResidualForce();
   const maxStrain = solver.getMaxStrain();
-  const targetReached = Math.abs(currentAlpha - targetAlpha) < 1e-4;
-
-  if (targetReached && maxResForce < 0.05 && ke < 1e-7) {
-    isConverged = true;
-  }
-
-  // Sleep at rest: when speed < 1e-4 m/s, strain < 0.01, and target alpha reached for N=10 frames
-  // (Never sleep while an active drag or pin manipulation is in progress)
-  const anySolver = solver as any;
-  const hasActiveDrag = (anySolver.barycentricDrag !== null && anySolver.barycentricDrag !== undefined) ||
-                        (anySolver.dragTargets && anySolver.dragTargets.size > 0);
-  const isResting = !hasActiveDrag && targetReached && maxSpeed < 1e-4 && maxStrain < 0.01;
-  if (isResting) {
-    restFrameCount++;
-  } else {
-    restFrameCount = 0;
-  }
-
-  if (restFrameCount >= 10) {
-    isSleeping = true;
-    isConverged = true;
-  }
+  const targetReached = driver.atTargetAlpha;
+  // Stopped: settled on its own or after the settle timeout. Nothing moves until the slider or
+  // the paper is touched again (SET_ALPHA / drag / pin wake it).
+  isConverged = driver.frozen;
+  if (driver.frozen) isSleeping = true;
 
   const tickDurationMs = performance.now() - tickStart;
   const now = performance.now();
   const timeBetweenPostsMs = lastPostTime > 0 ? (now - lastPostTime) : 0;
 
   // Drop-Stale Backpressure: only post if main thread has returned previous buffer
-  if (!isAwaitingBuffer) {
+  if (isAwaitingBuffer) {
+    // the paper just stopped on a frame we couldn't send: send it when the buffer comes back
+    if (isSleeping) finalFramePending = true;
+  } else {
     lastPostTime = now;
     const numCoords = mesh.numVertices * 3;
     const byteLength = numCoords * 4;
@@ -358,10 +375,8 @@ function runPhysicsTick() {
     (self as unknown as Worker).postMessage(response, [posF32.buffer]);
   }
 
-  // Keep looping only if not sleeping and not fully settled, or if actively dragged
-  if (!isSleeping && (!isConverged || !targetReached || hasActiveDrag)) {
-    scheduleNextTick();
-  }
+  // Keep looping until the driver stops the paper (it never stops while the paper is held)
+  if (!isSleeping) scheduleNextTick();
 }
 
 /** One frame of the exact fold: move alpha toward the target and pose the pattern directly. */
@@ -479,21 +494,8 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
         exactInfo = exactPlayer ? exact.info : { ...exact.info, active: false };
         relaxBake = exactPlayer ? createRelaxBake(exactPlayer, mesh) : null;
         const sOpts = req.solverOptions ?? {};
-        solver = new XPBDSolver(mesh, {
-          substeps: sOpts.substeps ?? 10,
-          iterations: 2,
-          velocityDamping: 0.995,
-          enableTable: sOpts.enableTable ?? false,
-          tableZ: sOpts.tableZ ?? 0.0,
-          paperThickness: sOpts.paperThickness,
-          enableGravity: sOpts.enableGravity ?? false,
-          gravity: sOpts.gravity ?? 1.0,
-          muStatic: sOpts.muStatic ?? 0.5,
-          muKinetic: sOpts.muKinetic ?? 0.4,
-          bendingCompliance: sOpts.bendingCompliance,
-          enablePlasticity: true,
-          enableSelfCollision: sOpts.enableSelfCollision ?? false,
-        });
+        solver = buildSolver(mesh, sOpts);
+        driver = new FoldDriver(mesh, solver);
 
         // Seed microscopic out-of-plane perturbation at center (physics only)
         if (!exactPlayer) {
@@ -645,6 +647,7 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
         currentAlpha = 0;
         targetAlpha = 0;
         rampRestAngles(mesh, 0);
+        driver?.jumpTo(0);
         for (let i = 0; i < mesh.numVertices; i++) {
           mesh.positions[i * 3 + 0] = mesh.uvs[i * 2 + 0];
           mesh.positions[i * 3 + 1] = mesh.uvs[i * 2 + 1];
@@ -686,6 +689,13 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
           bufferPool.push(req.buffer as ArrayBuffer);
         }
         isAwaitingBuffer = false;
+        if (finalFramePending && isSleeping && mesh && solver && !exactPlayer) {
+          // re-run one (frozen, motionless) tick just to post the final pose
+          finalFramePending = false;
+          isSleeping = false;
+          runPhysicsTick();
+          break;
+        }
         // If simulation loop was waiting and NOT sleeping, schedule immediately
         if (loopTimer === null && (!isPaused && !isSleeping && mesh && solver)) {
           scheduleNextTick();
@@ -721,22 +731,9 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
         );
 
         // Recreate solver with new mesh
-        const sOpts = currentPhysicsParams ?? {};
-        solver = new XPBDSolver(newMesh, {
-          substeps: sOpts.substeps ?? 10,
-          iterations: 2,
-          velocityDamping: 0.995,
-          enableTable: sOpts.enableTable ?? false,
-          tableZ: sOpts.tableZ ?? 0.0,
-          paperThickness: sOpts.paperThickness,
-          enableGravity: sOpts.enableGravity ?? false,
-          gravity: sOpts.gravity ?? 1.0,
-          muStatic: sOpts.muStatic ?? 0.5,
-          muKinetic: sOpts.muKinetic ?? 0.4,
-          bendingCompliance: sOpts.bendingCompliance,
-          enablePlasticity: true,
-          enableSelfCollision: sOpts.enableSelfCollision ?? false,
-        });
+        solver = buildSolver(newMesh, currentPhysicsParams ?? {});
+        driver = new FoldDriver(newMesh, solver);
+        driver.jumpTo(currentAlpha);
 
         isAwaitingBuffer = false;
         bufferPool.length = 0;
@@ -767,22 +764,9 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
           if (exactInfo) exactInfo = { ...exactInfo, active: false, available: false, reason: 'pattern edited' };
           currentFold = prev.fold;
 
-          const sOpts = currentPhysicsParams ?? {};
-          solver = new XPBDSolver(mesh, {
-            substeps: sOpts.substeps ?? 10,
-            iterations: 2,
-            velocityDamping: 0.995,
-            enableTable: sOpts.enableTable ?? false,
-            tableZ: sOpts.tableZ ?? 0.0,
-            paperThickness: sOpts.paperThickness,
-            enableGravity: sOpts.enableGravity ?? false,
-            gravity: sOpts.gravity ?? 1.0,
-            muStatic: sOpts.muStatic ?? 0.5,
-            muKinetic: sOpts.muKinetic ?? 0.4,
-            bendingCompliance: sOpts.bendingCompliance,
-            enablePlasticity: true,
-            enableSelfCollision: sOpts.enableSelfCollision ?? false,
-          });
+          solver = buildSolver(mesh, currentPhysicsParams ?? {});
+          driver = new FoldDriver(mesh, solver);
+          driver.jumpTo(currentAlpha);
 
           isAwaitingBuffer = false;
           bufferPool.length = 0;
@@ -806,22 +790,9 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
           if (exactInfo) exactInfo = { ...exactInfo, active: false, available: false, reason: 'pattern edited' };
           currentFold = next.fold;
 
-          const sOpts = currentPhysicsParams ?? {};
-          solver = new XPBDSolver(mesh, {
-            substeps: sOpts.substeps ?? 10,
-            iterations: 2,
-            velocityDamping: 0.995,
-            enableTable: sOpts.enableTable ?? false,
-            tableZ: sOpts.tableZ ?? 0.0,
-            paperThickness: sOpts.paperThickness,
-            enableGravity: sOpts.enableGravity ?? false,
-            gravity: sOpts.gravity ?? 1.0,
-            muStatic: sOpts.muStatic ?? 0.5,
-            muKinetic: sOpts.muKinetic ?? 0.4,
-            bendingCompliance: sOpts.bendingCompliance,
-            enablePlasticity: true,
-            enableSelfCollision: sOpts.enableSelfCollision ?? false,
-          });
+          solver = buildSolver(mesh, currentPhysicsParams ?? {});
+          driver = new FoldDriver(mesh, solver);
+          driver.jumpTo(currentAlpha);
 
           isAwaitingBuffer = false;
           bufferPool.length = 0;

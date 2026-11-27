@@ -38,6 +38,14 @@ export interface XPBDSolverOptions {
   // Phase 9: Self-collision via XPBD
   enableSelfCollision?: boolean;
   selfCollisionMargin?: number;
+
+  /**
+   * Remove net linear and angular momentum each substep when nothing external acts on the paper
+   * (no table, gravity, pins or drag). Internal constraints conserve momentum, so any net drift is
+   * numerical error (mostly from contacts in jammed layers) and would send the model flying.
+   * Default true.
+   */
+  removeRigidMotion?: boolean;
 }
 
 /**
@@ -85,6 +93,7 @@ export class XPBDSolver implements FoldSolver {
 
   // Phase 9: Self-collision via XPBD
   enableSelfCollision: boolean;
+  removeRigidMotion: boolean;
   private spatialHash: SpatialHash;
   private selfContacts: ContactData[] = [];
   private selfCollisionMargin: number;
@@ -154,6 +163,7 @@ export class XPBDSolver implements FoldSolver {
 
     // Phase 9: Self-collision via XPBD
     this.enableSelfCollision = options.enableSelfCollision ?? false;
+    this.removeRigidMotion = options.removeRigidMotion ?? true;
     const margin = options.selfCollisionMargin ?? Math.max(0.05, this.paperThickness * 2);
     this.selfCollisionMargin = margin;
     this.spatialHash = new SpatialHash(margin);
@@ -368,6 +378,9 @@ export class XPBDSolver implements FoldSolver {
     posStar[p1 + 0] += k1 * cx; posStar[p1 + 1] += k1 * cy; posStar[p1 + 2] += k1 * cz;
     posStar[p2 + 0] += k2 * cx; posStar[p2 + 1] += k2 * cy; posStar[p2 + 2] += k2 * cz;
   }
+
+  /** Contact-only passes at the end of each substep (non-penetration has priority over stretch). */
+  finalContactPasses = 3;
 
   /** Max allowed bar strain at the end of a substep before extra bar-only sweeps kick in. */
   strainLimit = 0.01;
@@ -758,6 +771,18 @@ export class XPBDSolver implements FoldSolver {
       // bar-only sweeps; no cost when the sheet is already near-inextensible.
       this.limitStrain(posStar);
 
+      // Contacts get the last word before positions are committed: bars and hinges run after the
+      // contact pass inside the iterations and, when crease targets fight each other, they push
+      // layers back through one another. A few extra contact passes here cost little and keep
+      // layers on the side they were on.
+      if (this.enableSelfCollision && this.selfContacts.length > 0) {
+        for (let k = 0; k < this.finalContactPasses; k++) {
+          solveContactsXPBD(this.selfContacts, posStar, pos, invMass, this.muStatic, this.muKinetic);
+        }
+        // pull any stretch the contacts introduced back under the limit (its sweeps end on contacts)
+        this.limitStrain(posStar);
+      }
+
 
       // 3. Update velocities and commit positions
       const damp = this.velocityDamping;
@@ -791,6 +816,14 @@ export class XPBDSolver implements FoldSolver {
           pos[i3 + 2] = posStar[i3 + 2];
         }
       }
+
+      if (this.removeRigidMotion && this.isFree()) this.cancelRigidVelocity();
+
+      // Track every hinge's angle continuously. computeDihedralAngle unwraps against previousAngle;
+      // without this update a crease nudged past ±180° reads as ∓180° and the constraint folds it
+      // violently back the other way (wrong-way creases, endless motion, paper through paper).
+      const hinges = this.mesh.hinges;
+      for (let hi = 0; hi < numHinges; hi++) computeDihedralAngle(hinges[hi], pos, true);
     }
 
     // Phase 8: Plastic hinge yield & springback update
@@ -843,6 +876,63 @@ export class XPBDSolver implements FoldSolver {
     }
   }
 
+
+  /** Nothing external acts on the paper: no table, gravity, pins or drag. */
+  private isFree(): boolean {
+    return (
+      !this.enableTable &&
+      !this.enableGravity &&
+      this.fixedVertices.size === 0 &&
+      this.dragTargets.size === 0 &&
+      this.barycentricPins.length === 0 &&
+      !this.barycentricDrag
+    );
+  }
+
+  /** Subtract the mass-weighted mean velocity and the rigid rotation from all vertex velocities. */
+  private cancelRigidVelocity(): void {
+    const n = this.mesh.numVertices;
+    const pos = this.mesh.positions, vel = this.mesh.velocities, m = this.mesh.masses;
+    let M = 0, cx = 0, cy = 0, cz = 0, px = 0, py = 0, pz = 0;
+    for (let i = 0; i < n; i++) {
+      const mi = m[i] > 0 ? m[i] : 1, i3 = i * 3;
+      M += mi;
+      cx += mi * pos[i3]; cy += mi * pos[i3 + 1]; cz += mi * pos[i3 + 2];
+      px += mi * vel[i3]; py += mi * vel[i3 + 1]; pz += mi * vel[i3 + 2];
+    }
+    if (M <= 0) return;
+    cx /= M; cy /= M; cz /= M;
+    const vx = px / M, vy = py / M, vz = pz / M;
+    // angular momentum L and inertia tensor I about the centre of mass
+    let Lx = 0, Ly = 0, Lz = 0;
+    let Ixx = 0, Iyy = 0, Izz = 0, Ixy = 0, Ixz = 0, Iyz = 0;
+    for (let i = 0; i < n; i++) {
+      const mi = m[i] > 0 ? m[i] : 1, i3 = i * 3;
+      const rx = pos[i3] - cx, ry = pos[i3 + 1] - cy, rz = pos[i3 + 2] - cz;
+      const ux = vel[i3] - vx, uy = vel[i3 + 1] - vy, uz = vel[i3 + 2] - vz;
+      Lx += mi * (ry * uz - rz * uy); Ly += mi * (rz * ux - rx * uz); Lz += mi * (rx * uy - ry * ux);
+      Ixx += mi * (ry * ry + rz * rz); Iyy += mi * (rx * rx + rz * rz); Izz += mi * (rx * rx + ry * ry);
+      Ixy -= mi * rx * ry; Ixz -= mi * rx * rz; Iyz -= mi * ry * rz;
+    }
+    // omega = I^-1 L (symmetric 3x3 inverse via cofactors; skip rotation if I is singular)
+    const a = Ixx, b = Ixy, c = Ixz, d = Iyy, e = Iyz, f = Izz;
+    const c00 = d * f - e * e, c01 = c * e - b * f, c02 = b * e - c * d;
+    const c11 = a * f - c * c, c12 = b * c - a * e, c22 = a * d - b * b;
+    const det = a * c00 + b * c01 + c * c02;
+    let wx = 0, wy = 0, wz = 0;
+    if (Math.abs(det) > 1e-18) {
+      wx = (c00 * Lx + c01 * Ly + c02 * Lz) / det;
+      wy = (c01 * Lx + c11 * Ly + c12 * Lz) / det;
+      wz = (c02 * Lx + c12 * Ly + c22 * Lz) / det;
+    }
+    for (let i = 0; i < n; i++) {
+      const i3 = i * 3;
+      const rx = pos[i3] - cx, ry = pos[i3 + 1] - cy, rz = pos[i3 + 2] - cz;
+      vel[i3] -= vx + (wy * rz - wz * ry);
+      vel[i3 + 1] -= vy + (wz * rx - wx * rz);
+      vel[i3 + 2] -= vz + (wx * ry - wy * rx);
+    }
+  }
 
   getKineticEnergy(): number {
     let ke = 0;

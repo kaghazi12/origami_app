@@ -25,9 +25,22 @@ describe('bundled .fold files', () => {
     const V = sheet.vertices_coords as number[][];
     const area = (f: number[]) => f.reduce((s, v, i) => { const a = V[v], b = V[f[(i + 1) % f.length]]; return s + a[0] * b[1] - b[0] * a[1]; }, 0) / 2;
     const total = (sheet.faces_vertices as number[][]).reduce((s, f) => s + Math.abs(area(f)), 0);
-    let minX = Infinity, maxX = -Infinity, minY = Infinity, maxY = -Infinity;
-    for (const [x, y] of V) { minX = Math.min(minX, x); maxX = Math.max(maxX, x); minY = Math.min(minY, y); maxY = Math.max(maxY, y); }
-    expect(total).toBeCloseTo((maxX - minX) * (maxY - minY), 9);
+    // the paper's outline: chain the boundary (B) edges into a loop and take its area, so sheets
+    // that aren't rectangles (e.g. a Miura-ori with zigzag edges) are checked too
+    const next = new Map<number, number[]>();
+    sheet.edges_vertices.forEach(([a, b]: [number, number], e: number) => {
+      if (sheet.edges_assignment[e] !== 'B') return;
+      next.set(a, [...(next.get(a) ?? []), b]);
+      next.set(b, [...(next.get(b) ?? []), a]);
+    });
+    const start = next.keys().next().value as number;
+    const loop = [start];
+    for (let prev = -1, cur = start; ; ) {
+      const nb = (next.get(cur) ?? []).find((x) => x !== prev);
+      if (nb === undefined || nb === start) break;
+      loop.push(nb); prev = cur; cur = nb;
+    }
+    expect(total).toBeCloseTo(Math.abs(area(loop)), 9);
   });
 });
 
