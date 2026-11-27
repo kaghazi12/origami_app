@@ -1,0 +1,272 @@
+{
+  "format": "origami-design",
+  "version": 1,
+  "meta": {
+    "id": "paper-airplane",
+    "title": "Paper Airplane (Dart)",
+    "author": "Traditional",
+    "description": "The classic dart from a rectangle of printer paper. Narrow wings make it fast and straight.",
+    "difficulty": "beginner",
+    "tags": [
+      "airplane",
+      "rectangle",
+      "flies"
+    ]
+  },
+  "paper": {
+    "width": 1,
+    "height": 1.4142135623730951,
+    "front": "#ffffff",
+    "back": "#3d7fc4"
+  },
+  "steps": [
+    {
+      "caption": "Fold the paper in half lengthwise",
+      "hint": "Crease it well, then open it again.",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            0.5,
+            0
+          ],
+          [
+            0.5,
+            1.414213562
+          ]
+        ],
+        "moving": [
+          0.2,
+          0.7
+        ],
+        "direction": "valley"
+      }
+    },
+    {
+      "caption": "Unfold",
+      "hint": "The crease marks the centre line.",
+      "action": {
+        "type": "unfold"
+      }
+    },
+    {
+      "caption": "Fold the top left corner to the centre line",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            0.5,
+            1.414213562
+          ],
+          [
+            0,
+            0.914213562
+          ]
+        ],
+        "moving": [
+          0.05,
+          1.364213562
+        ],
+        "direction": "valley"
+      }
+    },
+    {
+      "caption": "Fold the top right corner to the centre line",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            0.5,
+            1.414213562
+          ],
+          [
+            1,
+            0.914213562
+          ]
+        ],
+        "moving": [
+          0.95,
+          1.364213562
+        ],
+        "direction": "valley"
+      }
+    },
+    {
+      "caption": "Fold the left slanted edge to the centre line",
+      "hint": "The nose gets narrower and sharper.",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            0.5,
+            1.414213562
+          ],
+          [
+            0,
+            0.207106781
+          ]
+        ],
+        "moving": [
+          0.03,
+          0.307106781
+        ],
+        "direction": "valley"
+      }
+    },
+    {
+      "caption": "Fold the right slanted edge to the centre line",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            0.5,
+            1.414213562
+          ],
+          [
+            1,
+            0.207106781
+          ]
+        ],
+        "moving": [
+          0.97,
+          0.307106781
+        ],
+        "direction": "valley"
+      }
+    },
+    {
+      "caption": "Fold the plane in half, folds on the outside",
+      "hint": "A mountain fold along the centre line: the right half goes behind.",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            0.5,
+            0
+          ],
+          [
+            0.5,
+            1.414213562
+          ]
+        ],
+        "moving": [
+          0.566,
+          1.06
+        ],
+        "direction": "mountain"
+      }
+    },
+    {
+      "caption": "Fold the front wing down to the bottom edge",
+      "hint": "Fold along a line parallel to the bottom edge of the body.",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            0.36,
+            0
+          ],
+          [
+            0.36,
+            1.414213562
+          ]
+        ],
+        "moving": [
+          0.339,
+          0.99
+        ],
+        "direction": "valley",
+        "layers": 4
+      }
+    },
+    {
+      "caption": "Turn the plane over",
+      "action": {
+        "type": "turnOver"
+      }
+    },
+    {
+      "caption": "Fold the other wing to match",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            0.36,
+            0
+          ],
+          [
+            0.36,
+            1.414213562
+          ]
+        ],
+        "moving": [
+          0.38,
+          0.99
+        ],
+        "direction": "valley",
+        "layers": 4
+      }
+    },
+    {
+      "caption": "Lift this wing back up until it stands level",
+      "hint": "Open it to a right angle with the body.",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            0.36,
+            0
+          ],
+          [
+            0.36,
+            1.414213562
+          ]
+        ],
+        "moving": [
+          0.341,
+          0.99
+        ],
+        "direction": "valley",
+        "layers": 4,
+        "angle": 90
+      }
+    },
+    {
+      "caption": "Turn the plane over",
+      "action": {
+        "type": "turnOver"
+      }
+    },
+    {
+      "caption": "Lift the other wing level too",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            0,
+            0
+          ],
+          [
+            0,
+            1.414213562
+          ]
+        ],
+        "moving": [
+          0.0141,
+          0.9617
+        ],
+        "direction": "valley",
+        "layers": 4,
+        "angle": 90
+      }
+    },
+    {
+      "caption": "Turn the plane so its nose points forward",
+      "hint": "Done. Hold the body underneath, between the wings, and throw it level.",
+      "action": {
+        "type": "rotate",
+        "degrees": -90
+      }
+    }
+  ]
+}

@@ -274,12 +274,27 @@ export class DesignAnimator {
       acc[root * 3 + 2] += corner[c * 3 + 2];
       cnt[root]++;
     }
+    // A welded corner moves to the average of its group, but never more than just under half a
+    // layer gap away from its own layered position. Without the limit, a corner shared by many
+    // layers (the apex of a stack of flaps) drags a low face up through the face lying on it,
+    // and that face disappears from view. With it, faces whose stacking heights differ by a
+    // layer can never swap. The raw positions in a group already coincide (within JOIN), so the
+    // limit only leaves the thin wedge between layers of different heights at a fold edge.
+    const maxShift = this.layerGap * 0.45;
     const positions = new Float32Array(g.cornerCount * 3);
     for (let c = 0; c < g.cornerCount; c++) {
       const root = find(c);
-      positions[c * 3] = acc[root * 3] / cnt[root];
-      positions[c * 3 + 1] = acc[root * 3 + 1] / cnt[root];
-      positions[c * 3 + 2] = acc[root * 3 + 2] / cnt[root];
+      const dx = acc[root * 3] / cnt[root] - corner[c * 3];
+      const dy = acc[root * 3 + 1] / cnt[root] - corner[c * 3 + 1];
+      const dz = acc[root * 3 + 2] / cnt[root] - corner[c * 3 + 2];
+      // the part of the shift that is just closing a raw gap (faces meeting mid-step) is kept in full
+      const rx = raw[root * 3] - raw[c * 3], ry = raw[root * 3 + 1] - raw[c * 3 + 1], rz = raw[root * 3 + 2] - raw[c * 3 + 2];
+      const ox = dx - rx, oy = dy - ry, oz = dz - rz;
+      const len = Math.hypot(ox, oy, oz);
+      const s = len > maxShift ? maxShift / len : 1;
+      positions[c * 3] = corner[c * 3] + rx + ox * s;
+      positions[c * 3 + 1] = corner[c * 3 + 1] + ry + oy * s;
+      positions[c * 3 + 2] = corner[c * 3 + 2] + rz + oz * s;
     }
 
     const folded: number[] = [];

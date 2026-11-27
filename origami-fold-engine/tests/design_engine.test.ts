@@ -295,6 +295,29 @@ describe('animator', () => {
     }
   });
 
+  it.each(fs.readdirSync(DESIGNS).filter((f) => f.endsWith('.json')))(
+    '%s: every face is drawn at its own layer height when the model lies flat (top layers stay visible)',
+    { timeout: 60000 },
+    (file) => {
+      // Regression: welding corners averaged the heights of every layer meeting at a corner, which
+      // pushed low faces up through the faces lying on them (the dog's muzzle, the helmet's brim).
+      const cd = ok(JSON.parse(fs.readFileSync(path.join(DESIGNS, file), 'utf8')));
+      const a = new DesignAnimator(cd);
+      for (let p = 0; p <= cd.steps.length; p++) {
+        const s = p < cd.steps.length ? cd.steps[p].record.before : cd.steps[p - 1].record.after;
+        if (!s.flat) continue;
+        const pose = a.pose(p);
+        const g = pose.geometry;
+        for (let corner = 0; corner < g.cornerCount; corner++) {
+          const f = g.faceOfCorner[corner];
+          const base = s.transforms[f][14];
+          const want = base + s.ranks[f] * a.layerGap;
+          expect(Math.abs(pose.positions[corner * 3 + 2] - want), `${file} at ${p}, face ${f}`).toBeLessThan(a.layerGap * 0.5);
+        }
+      }
+    },
+  );
+
   it('keeps the paper connected (welded) mid-step', () => {
     // during the petal fold, shared paper corners must coincide
     const k = c.steps.findIndex((s) => s.caption === 'Petal fold');

@@ -506,7 +506,7 @@ export const LandingPage: React.FC = () => {
       <footer className="bg-ink text-paper-muted">
         <div className="mx-auto flex max-w-6xl flex-col gap-5 px-6 py-10 text-sm md:flex-row md:items-center md:justify-between">
           <Wordmark tone="inverse" intro={false} />
-          <p>The paper cup and crane are traditional designs. Box with wing by Jason Ku.</p>
+          <p>The Learn designs are traditional models. Box with wing by Jason Ku.</p>
           <nav aria-label="Footer" className="flex gap-5">
             <a href={ROUTE_HASH.learn} className="crease-link hover:text-paper">
               Learn

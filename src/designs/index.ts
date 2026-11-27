@@ -14,6 +14,10 @@ import {
 import cupJson from './paper-cup.json';
 import prelimJson from './preliminary-base.json';
 import craneJson from './crane.json';
+import dogJson from './dog-face.json';
+import helmetJson from './samurai-helmet.json';
+import planeJson from './paper-airplane.json';
+import swanJson from './swan.json';
 import birdBaseText from './bird-base.fold?raw';
 import boxText from './box.fold?raw';
 import test3Text from './test-3.fold?raw';
@@ -46,7 +50,15 @@ function stepEntry(json: unknown): StepDesignEntry {
 }
 
 /** Learn mode, easiest first. */
-export const STEP_DESIGNS: StepDesignEntry[] = [stepEntry(cupJson), stepEntry(prelimJson), stepEntry(craneJson)];
+export const STEP_DESIGNS: StepDesignEntry[] = [
+  stepEntry(cupJson),
+  stepEntry(dogJson),
+  stepEntry(planeJson),
+  stepEntry(helmetJson),
+  stepEntry(prelimJson),
+  stepEntry(swanJson),
+  stepEntry(craneJson),
+];
 
 export interface PatternEntry {
   id: string;

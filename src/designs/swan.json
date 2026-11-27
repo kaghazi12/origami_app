@@ -1,0 +1,270 @@
+{
+  "format": "origami-design",
+  "version": 1,
+  "meta": {
+    "id": "swan",
+    "title": "Swan",
+    "author": "Traditional",
+    "description": "A swan with a long neck, from a kite base. Introduces turning the model over and reverse folds.",
+    "difficulty": "intermediate",
+    "tags": [
+      "bird",
+      "kite base",
+      "reverse fold"
+    ]
+  },
+  "paper": {
+    "width": 1,
+    "height": 1,
+    "front": "#3a5a9c",
+    "back": "#f7f8fb"
+  },
+  "steps": [
+    {
+      "caption": "Turn the square so a corner points up",
+      "hint": "Coloured side up: the white side becomes the swan.",
+      "action": {
+        "type": "rotate",
+        "degrees": 45
+      }
+    },
+    {
+      "caption": "Fold in half from left to right",
+      "hint": "Crease, then open it again.",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            0.5,
+            -0.207106781
+          ],
+          [
+            0.5,
+            1.207106781
+          ]
+        ],
+        "moving": [
+          -0.107106781,
+          0.5
+        ],
+        "direction": "valley"
+      }
+    },
+    {
+      "caption": "Unfold",
+      "action": {
+        "type": "unfold"
+      }
+    },
+    {
+      "caption": "Fold the lower left edge to the centre line",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            0.5,
+            -0.207106781
+          ],
+          [
+            0.085786438,
+            0.792893219
+          ]
+        ],
+        "moving": [
+          -0.157106781,
+          0.5
+        ],
+        "direction": "valley"
+      }
+    },
+    {
+      "caption": "Fold the lower right edge to the centre line",
+      "hint": "This is a kite base.",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            0.5,
+            -0.207106781
+          ],
+          [
+            0.914213562,
+            0.792893219
+          ]
+        ],
+        "moving": [
+          1.157106781,
+          0.5
+        ],
+        "direction": "valley"
+      }
+    },
+    {
+      "caption": "Turn the model over",
+      "action": {
+        "type": "turnOver"
+      }
+    },
+    {
+      "caption": "Fold the left edge to the centre line again",
+      "hint": "The bottom point becomes long and thin: the neck.",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            0.5,
+            -0.207106781
+          ],
+          [
+            0.265366865,
+            0.972473646
+          ]
+        ],
+        "moving": [
+          0.115786438,
+          0.792893219
+        ],
+        "direction": "valley"
+      }
+    },
+    {
+      "caption": "Fold the right edge to the centre line",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            0.5,
+            -0.207106781
+          ],
+          [
+            0.734633135,
+            0.972473646
+          ]
+        ],
+        "moving": [
+          0.884213562,
+          0.792893219
+        ],
+        "direction": "valley"
+      }
+    },
+    {
+      "caption": "Fold the bottom point up to the top point",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            0,
+            0.5
+          ],
+          [
+            1,
+            0.5
+          ]
+        ],
+        "moving": [
+          0.48,
+          0.1
+        ],
+        "direction": "valley"
+      }
+    },
+    {
+      "caption": "Fold the tip down to make the head",
+      "hint": "Only the neck, not the body behind it.",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            0,
+            1.07
+          ],
+          [
+            1,
+            1.07
+          ]
+        ],
+        "moving": [
+          0.49,
+          1.15
+        ],
+        "direction": "valley",
+        "layers": 4
+      }
+    },
+    {
+      "caption": "Fold the model in half, folds on the outside",
+      "hint": "A mountain fold along the centre line: the right half goes behind.",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            0.5,
+            0
+          ],
+          [
+            0.5,
+            1.3
+          ]
+        ],
+        "moving": [
+          0.6,
+          0.7
+        ],
+        "direction": "mountain"
+      }
+    },
+    {
+      "caption": "Turn the model so the back of the swan lies flat",
+      "action": {
+        "type": "rotate",
+        "degrees": -90
+      }
+    },
+    {
+      "caption": "Pull the neck up",
+      "hint": "An outside reverse fold: open the neck slightly and swing it up around the body until it stands almost straight.",
+      "action": {
+        "type": "reverseFold",
+        "line": [
+          [
+            0.029,
+            0.736
+          ],
+          [
+            0.086357644,
+            0.817915204
+          ]
+        ],
+        "moving": [
+          0.4,
+          0.75
+        ],
+        "mode": "outside",
+        "layers": "top"
+      }
+    },
+    {
+      "caption": "Push the tail up inside",
+      "hint": "An inside reverse fold: the tip of the body tucks in between its own layers.",
+      "action": {
+        "type": "reverseFold",
+        "line": [
+          [
+            0.55,
+            0.736
+          ],
+          [
+            0.626604444,
+            0.800278761
+          ]
+        ],
+        "moving": [
+          0.7,
+          0.745
+        ],
+        "mode": "inside"
+      }
+    }
+  ]
+}

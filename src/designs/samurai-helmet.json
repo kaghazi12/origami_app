@@ -1,0 +1,252 @@
+{
+  "format": "origami-design",
+  "version": 1,
+  "meta": {
+    "id": "samurai-helmet",
+    "title": "Samurai Helmet (Kabuto)",
+    "author": "Traditional",
+    "description": "The kabuto children fold in Japan for Children’s Day. Folded from a big sheet it fits on your head.",
+    "difficulty": "beginner",
+    "tags": [
+      "helmet",
+      "wearable",
+      "layers"
+    ]
+  },
+  "paper": {
+    "width": 1,
+    "height": 1,
+    "front": "#f6efdf",
+    "back": "#b8232f"
+  },
+  "steps": [
+    {
+      "caption": "Turn the square so a corner points up",
+      "action": {
+        "type": "rotate",
+        "degrees": 45
+      }
+    },
+    {
+      "caption": "Fold the top corner down to the bottom corner",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            -0.207106781,
+            0.5
+          ],
+          [
+            1.207106781,
+            0.5
+          ]
+        ],
+        "moving": [
+          0.5,
+          1
+        ],
+        "direction": "valley"
+      }
+    },
+    {
+      "caption": "Fold the left corner down to the bottom point",
+      "hint": "Both layers. The edges meet along the centre line.",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            0.5,
+            0.5
+          ],
+          [
+            0.146446609,
+            0.146446609
+          ]
+        ],
+        "moving": [
+          -0.1,
+          0.45
+        ],
+        "direction": "valley"
+      }
+    },
+    {
+      "caption": "Fold the right corner down to the bottom point",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            0.5,
+            0.5
+          ],
+          [
+            0.853553391,
+            0.146446609
+          ]
+        ],
+        "moving": [
+          1.1,
+          0.45
+        ],
+        "direction": "valley"
+      }
+    },
+    {
+      "caption": "Fold the left flap’s point up to the top",
+      "hint": "Only the flap you just folded, not the layers behind it.",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            0.146446609,
+            0.146446609
+          ],
+          [
+            0.5,
+            0.146446609
+          ]
+        ],
+        "moving": [
+          0.45,
+          -0.1
+        ],
+        "direction": "valley",
+        "layers": 2
+      }
+    },
+    {
+      "caption": "Fold the right flap’s point up to the top",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            0.5,
+            0.146446609
+          ],
+          [
+            0.853553391,
+            0.146446609
+          ]
+        ],
+        "moving": [
+          0.55,
+          -0.1
+        ],
+        "direction": "valley",
+        "layers": 2
+      }
+    },
+    {
+      "caption": "Fold the left point out to make a horn",
+      "hint": "Fold from just above the bottom of the flap, angled out.",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            0.5,
+            0.196446609
+          ],
+          [
+            0.435851621,
+            0.435851621
+          ]
+        ],
+        "moving": [
+          0.49,
+          0.45
+        ],
+        "direction": "valley",
+        "layers": 2
+      }
+    },
+    {
+      "caption": "Fold the right point out the same way",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            0.5,
+            0.196446609
+          ],
+          [
+            0.564148379,
+            0.435851621
+          ]
+        ],
+        "moving": [
+          0.51,
+          0.45
+        ],
+        "direction": "valley",
+        "layers": 2
+      }
+    },
+    {
+      "caption": "Fold the front bottom point up",
+      "hint": "Only the front layer. Its tip goes up over the horns.",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            0,
+            0.026446609
+          ],
+          [
+            1,
+            0.026446609
+          ]
+        ],
+        "moving": [
+          0.5,
+          -0.15
+        ],
+        "direction": "valley",
+        "layers": "top"
+      }
+    },
+    {
+      "caption": "Fold the edge up again to make the brim",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            0,
+            0.146446609
+          ],
+          [
+            1,
+            0.146446609
+          ]
+        ],
+        "moving": [
+          0.5,
+          0.1
+        ],
+        "direction": "valley",
+        "layers": 2
+      }
+    },
+    {
+      "caption": "Fold the back point up behind",
+      "hint": "The helmet is done. Open the bottom to wear it.",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            0,
+            0.146446609
+          ],
+          [
+            1,
+            0.146446609
+          ]
+        ],
+        "moving": [
+          0.5,
+          -0.1
+        ],
+        "direction": "mountain"
+      }
+    }
+  ]
+}

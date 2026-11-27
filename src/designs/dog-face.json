@@ -1,0 +1,141 @@
+{
+  "format": "origami-design",
+  "version": 1,
+  "meta": {
+    "id": "dog-face",
+    "title": "Dog Face",
+    "author": "Traditional",
+    "description": "A floppy-eared puppy in six folds. The easiest model here: every fold is a single straight crease.",
+    "difficulty": "beginner",
+    "tags": [
+      "animal",
+      "face",
+      "simple folds"
+    ]
+  },
+  "paper": {
+    "width": 1,
+    "height": 1,
+    "front": "#f4ead8",
+    "back": "#9c5a2b"
+  },
+  "steps": [
+    {
+      "caption": "Turn the square so a corner points up",
+      "hint": "Light side up: the coloured side becomes the dog.",
+      "action": {
+        "type": "rotate",
+        "degrees": 45
+      }
+    },
+    {
+      "caption": "Fold the top corner down to the bottom corner",
+      "hint": "You now have a triangle with the fold along the top.",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            -0.207106781,
+            0.5
+          ],
+          [
+            1.207106781,
+            0.5
+          ]
+        ],
+        "moving": [
+          0.5,
+          1
+        ],
+        "direction": "valley"
+      }
+    },
+    {
+      "caption": "Fold the left corner down to make an ear",
+      "hint": "Let the corner hang down past the side of the face.",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            -0.119231524,
+            0.179665101
+          ],
+          [
+            -0.027875257,
+            0.220334899
+          ]
+        ],
+        "moving": [
+          -0.1,
+          0.45
+        ],
+        "direction": "valley"
+      }
+    },
+    {
+      "caption": "Fold the right corner down the same way",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            1.119231524,
+            0.179665101
+          ],
+          [
+            1.027875257,
+            0.220334899
+          ]
+        ],
+        "moving": [
+          1.1,
+          0.45
+        ],
+        "direction": "valley"
+      }
+    },
+    {
+      "caption": "Fold the front layer of the bottom point up for the nose",
+      "hint": "Only the front layer. The light side shows as a muzzle.",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            0,
+            -0.04
+          ],
+          [
+            1,
+            -0.04
+          ]
+        ],
+        "moving": [
+          0.5,
+          -0.15
+        ],
+        "direction": "valley",
+        "layers": "top"
+      }
+    },
+    {
+      "caption": "Fold the back point behind to square off the chin",
+      "action": {
+        "type": "fold",
+        "line": [
+          [
+            0,
+            -0.04
+          ],
+          [
+            1,
+            -0.04
+          ]
+        ],
+        "moving": [
+          0.5,
+          -0.15
+        ],
+        "direction": "mountain"
+      }
+    }
+  ]
+}
