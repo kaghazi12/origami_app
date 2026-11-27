@@ -42,19 +42,30 @@ export interface FoldedPattern {
   tear: number;
   layerCount: number;
   timeMs: number;
+  /**
+   * Edges (indices into the input) whose mountain/valley had to be swapped so the pattern could
+   * fold flat. Empty when the file's assignment folds as given.
+   */
+  reassigned: number[];
 }
 
 export interface FoldPatternOptions {
   /** Height between stacked layers, in paper units. */
   layerGap?: number;
   maxConflicts?: number;
+  /**
+   * When no layer order exists with the file's mountains and valleys, look for one with some of
+   * them swapped (the folded shape doesn't depend on mountain/valley, only the stacking does) and
+   * report which. Default true.
+   */
+  reassign?: boolean;
 }
 
 export function foldCreasePattern(cp: CreasePatternInput, opts: FoldPatternOptions = {}): FoldedPattern {
   const t0 = typeof performance !== 'undefined' ? performance.now() : Date.now();
   const nV = cp.vertices_coords.length;
   const fail = (reason: string, tear = Infinity): FoldedPattern => ({
-    ok: false, reason, vertices: new Float64Array(nV * 3), flatVertices: new Float64Array(nV * 3), vertexRanks: new Float64Array(nV), faceRanks: [], faceFlipped: [], tear, layerCount: 0,
+    ok: false, reason, vertices: new Float64Array(nV * 3), flatVertices: new Float64Array(nV * 3), vertexRanks: new Float64Array(nV), faceRanks: [], faceFlipped: [], tear, layerCount: 0, reassigned: [],
     timeMs: (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0,
   });
   const V = cp.vertices_coords.map((p) => [p[0], p[1]] as Vec2);
@@ -138,9 +149,39 @@ export function foldCreasePattern(cp: CreasePatternInput, opts: FoldPatternOptio
     if (Math.abs(angles[k]) > 1) folded.push({ a: c.a, b: c.b, sign: Math.sign(angles[k]), p0, p1 });
     else joints.push({ a: c.a, b: c.b, p0, p1 });
   });
-  const res = flatTarget
-    ? solveLayers({ polys, signs, folded, joints, maxConflicts: opts.maxConflicts ?? 200000 })
-    : { ok: true, ranks: new Array<number>(faces.length).fill(0) };
+  const maxConflicts = opts.maxConflicts ?? 200000;
+  let res = flatTarget
+    ? solveLayers({ polys, signs, folded, joints, maxConflicts })
+    : { ok: true, ranks: new Array<number>(faces.length).fill(0), above: new Map<number, boolean>() };
+  let reassigned: number[] = [];
+  if (!res.ok && flatTarget && opts.reassign !== false) {
+    const fixed = reassignForLayerOrder(polys, signs, folded, joints, maxConflicts);
+    if (fixed) {
+      res = fixed.res;
+      // every input edge lying on a swapped crease
+      const flippedCreases = new Set(fixed.flipped);
+      const onCrease = (e: number, k: number) => {
+        const c = topo.creases[k];
+        const [a, b] = cp.edges_vertices[e];
+        const mid: Vec2 = [(V[a][0] + V[b][0]) / 2, (V[a][1] + V[b][1]) / 2];
+        const dx = c.p1[0] - c.p0[0], dy = c.p1[1] - c.p0[1], L2 = dx * dx + dy * dy;
+        const t = ((mid[0] - c.p0[0]) * dx + (mid[1] - c.p0[1]) * dy) / L2;
+        if (t < 0 || t > 1) return false;
+        return Math.abs((mid[0] - c.p0[0]) * dy - (mid[1] - c.p0[1]) * dx) / Math.sqrt(L2) < 1e-9;
+      };
+      const creaseOfFolded = folded.map((f) => topo.creases.findIndex((c) => (c.a === f.a && c.b === f.b) || (c.a === f.b && c.b === f.a)));
+      const edges = new Set<number>();
+      for (const i of flippedCreases) {
+        const k = creaseOfFolded[i];
+        if (k < 0) continue;
+        cp.edges_vertices.forEach((_, e) => {
+          const s = cp.edges_assignment[e];
+          if ((s === 'M' || s === 'V') && onCrease(e, k)) edges.add(e);
+        });
+      }
+      reassigned = [...edges].sort((x, y) => x - y);
+    }
+  }
   if (!res.ok) return fail('no stacking order lets the paper lie flat without passing through itself', tear);
 
   // per-vertex folded position: rigid position, lifted by the average stacking height of its faces
@@ -167,9 +208,69 @@ export function foldCreasePattern(cp: CreasePatternInput, opts: FoldPatternOptio
   const faceFlipped = new Array<boolean>(cp.faces_vertices.length).fill(false);
   origIndex.forEach((orig, f) => { faceRanks[orig] = res.ranks[f]; faceFlipped[orig] = signs[f] < 0; });
   return {
-    ok: true, vertices: out, flatVertices, vertexRanks, faceRanks, faceFlipped, tear, layerCount: Math.max(0, ...res.ranks) + 1,
+    ok: true, vertices: out, flatVertices, vertexRanks, faceRanks, faceFlipped, tear, layerCount: Math.max(0, ...res.ranks) + 1, reassigned,
     timeMs: (typeof performance !== 'undefined' ? performance.now() : Date.now()) - t0,
   };
+}
+
+type LayerFold = { a: number; b: number; sign: number; p0: Vec2; p1: Vec2 };
+
+/**
+ * No layer order exists with these mountains and valleys. The folded shape is the same for any
+ * assignment, so solve the stacking with the folds' directions left open (a crease's direction
+ * then follows from which of its two faces ends up on top), preferring the file's direction for
+ * every crease. Then put back as many of the file's directions as still allow an order, one at a
+ * time, so only creases that must change are swapped. Returns the indices into `folded` whose
+ * direction changed, or null if no assignment at all folds flat.
+ */
+function reassignForLayerOrder(
+  polys: Vec2[][],
+  signs: number[],
+  folded: LayerFold[],
+  joints: { a: number; b: number; p0: Vec2; p1: Vec2 }[],
+  maxConflicts: number,
+): { res: ReturnType<typeof solveLayers>; flipped: number[] } | null {
+  const n = polys.length;
+  // the file's wish for each crease: "b above a" when signs[a] * sign > 0 (the crease rule)
+  const wish = new Map<number, boolean>();
+  folded.forEach((f) => {
+    const bAbove = signs[f.a] * f.sign > 0;
+    if (f.a < f.b) wish.set(f.a * n + f.b, !bAbove);
+    else wish.set(f.b * n + f.a, bAbove);
+  });
+  const prefer = (i: number, j: number) => wish.get(i * n + j);
+  const solve = (free: Set<number>, preferFirst: boolean, conflicts: number) =>
+    solveLayers({ polys, signs, folded: folded.map((f, i) => (free.has(i) ? { ...f, sign: 0 } : f)), joints, prefer, preferFirst, maxConflicts: conflicts });
+  const clock = () => (typeof performance !== 'undefined' ? performance.now() : Date.now());
+  /** Time for putting the file's directions back; whatever isn't tried by then stays swapped. */
+  const deadline = clock() + 2500;
+  const directionIn = (res: ReturnType<typeof solveLayers>, f: LayerFold) => {
+    const iAbove = res.above.get(Math.min(f.a, f.b) * n + Math.max(f.a, f.b));
+    if (iAbove === undefined) return f.sign;
+    const bAbove = f.a < f.b ? !iAbove : iAbove;
+    return bAbove ? signs[f.a] : -signs[f.a];
+  };
+
+  let free = new Set(folded.map((_, i) => i));
+  // deciding the file's directions first keeps most of them, but can make the search hard: give
+  // it a small budget, then fall back to the plain search (which keeps fewer)
+  let res = solve(free, true, 400);
+  if (!res.ok) res = solve(free, false, maxConflicts);
+  if (!res.ok) return null;
+  let flipped = folded.map((f, i) => (directionIn(res, f) !== f.sign ? i : -1)).filter((i) => i >= 0);
+  free = new Set(flipped);
+  // put the file's direction back wherever an order still exists
+  for (const i of flipped.slice()) {
+    if (clock() > deadline) break;
+    const trial = new Set(free);
+    trial.delete(i);
+    const r = solve(trial, true, 400);
+    if (!r.ok) continue;
+    res = r;
+    free = trial;
+  }
+  flipped = folded.map((f, i) => (free.has(i) && directionIn(res, f) !== f.sign ? i : -1)).filter((i) => i >= 0);
+  return { res, flipped };
 }
 
 /** Folded positions with each vertex lifted by gap * its stacking height. */

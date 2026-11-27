@@ -10,6 +10,7 @@ import { extractPlanarFaces } from '../fold/faces';
 import { ExactFoldPlayer, foldCreasePattern, withLayerGap } from '../design/creasePattern';
 import { computeDihedralAngle } from '../physics/hinges';
 import { FoldDriver } from '../physics/foldDriver';
+import { countMeshIntersections } from '../physics/collision';
 
 /** Patterns with more folded creases than this are folded exactly in 'auto' mode. */
 const EXACT_AUTO_MIN_CREASES = 24;
@@ -28,7 +29,11 @@ function exactLayerGap() {
  * Open the exact folded form slightly with physics (creases to 97%, 94%, ... 85%) and keep the
  * shapes as keyframes. Starting from the correct folded shape keeps physics on the right branch,
  * and slightly opened folds splay the flaps apart so the model is readable. Stops early if the
- * paper starts to stretch. Runs in the background so loading is not delayed.
+ * paper starts to stretch, or if a keyframe pushes paper through paper: the relaxation has no
+ * collisions, and on many patterns layers sank through the ones above them, so a second after
+ * loading the model near 100% showed the back colour where the front should be. A keyframe may
+ * not cross more triangles than the exact fold (whose stacked layers touch). Runs in the
+ * background so loading is not delayed.
  */
 function createRelaxBake(player: ExactFoldPlayer, base: TriMesh): () => boolean {
   const m = cloneTriMesh(base);
@@ -45,6 +50,8 @@ function createRelaxBake(player: ExactFoldPlayer, base: TriMesh): () => boolean 
     enableSelfCollision: false,
     bendingCompliance: 0.0005,
   });
+  const crossings = (pos: Float64Array) => countMeshIntersections(pos, m.indices, m.numTriangles).intersectionCount;
+  const allowed = crossings(m.positions);
   const levels = [0.97, 0.94, 0.91, 0.88, 0.85];
   const RAMP = 8, SETTLE = 4;
   const alphas = [1];
@@ -62,7 +69,7 @@ function createRelaxBake(player: ExactFoldPlayer, base: TriMesh): () => boolean 
       if (tick < RAMP + SETTLE) continue;
       let finite = true;
       for (let i = 0; i < m.positions.length && finite; i++) finite = Number.isFinite(m.positions[i]);
-      if (!finite || relax.getMaxStrain() > 0.06) { level = levels.length; break; }
+      if (!finite || relax.getMaxStrain() > 0.06 || crossings(m.positions) > allowed) { level = levels.length; break; }
       alphas.push(to);
       poses.push(Float64Array.from(m.positions));
       from = to; tick = 0; level++;
@@ -73,6 +80,17 @@ function createRelaxBake(player: ExactFoldPlayer, base: TriMesh): () => boolean 
     }
     return false;
   };
+}
+
+/**
+ * Paper strain at which a pattern that can't fold flat counts as jammed (FoldDriver.jamStrain).
+ * Valid patterns stay under 5% (fold_files_robustness.test.ts), so they never hit it.
+ */
+const JAM_STRAIN = 0.05;
+/** The open pattern can't fold flat (the exact folder found it impossible): limit the fold where it jams. */
+let foldIsImpossible = false;
+function newDriver(m: TriMesh, s: FoldSolver): FoldDriver {
+  return new FoldDriver(m, s, { jamStrain: foldIsImpossible ? JAM_STRAIN : null });
 }
 
 /** Background bake of the relaxed keyframes (runs a slice per loop iteration). */
@@ -147,10 +165,11 @@ function resumeExactFold() {
 }
 
 /** Try to fold the crease pattern exactly. Returns the player (when it should drive the fold) and info. */
-function prepareExactFold(fold: FoldFormat, mode: ExactFoldMode): { player: ExactFoldPlayer | null; info: ExactFoldInfo } {
+function prepareExactFold(input: FoldFormat, mode: ExactFoldMode): { player: ExactFoldPlayer | null; info: ExactFoldInfo; fold: FoldFormat } {
+  let fold = input;
   const creases = fold.edges_assignment.filter((a) => a === 'M' || a === 'V').length;
   const info: ExactFoldInfo = { available: false, active: false, mode, creases };
-  if (creases === 0) return { player: null, info: { ...info, reason: 'no mountain/valley creases' } };
+  if (creases === 0) return { player: null, info: { ...info, reason: 'no mountain/valley creases' }, fold };
 
   try {
     const faces = fold.faces_vertices && fold.faces_vertices.length ? fold.faces_vertices : extractPlanarFaces(fold);
@@ -162,7 +181,19 @@ function prepareExactFold(fold: FoldFormat, mode: ExactFoldMode): { player: Exac
       faces_vertices: faces,
     };
     const first = foldCreasePattern(cp, { layerGap: 0 });
-    if (!first.ok) return { player: null, info: { ...info, reason: first.reason, timeMs: first.timeMs } };
+    if (!first.ok) return { player: null, info: { ...info, reason: first.reason, timeMs: first.timeMs }, fold };
+    if (first.reassigned.length) {
+      // the file's mountains and valleys can't stack; fold (and show) the nearest assignment that can
+      const asg = fold.edges_assignment.slice();
+      const ang = (fold.edges_foldAngle ?? asg.map((a) => (a === 'V' ? 180 : a === 'M' ? -180 : 0))).slice();
+      for (const e of first.reassigned) {
+        asg[e] = asg[e] === 'M' ? 'V' : 'M';
+        ang[e] = -(ang[e] ?? 0);
+      }
+      fold = { ...fold, edges_assignment: asg, edges_foldAngle: ang };
+      cp.edges_assignment = asg;
+      cp.edges_foldAngle = ang;
+    }
     let x0 = Infinity, x1 = -Infinity, y0 = Infinity, y1 = -Infinity;
     for (const v of cp.vertices_coords) { x0 = Math.min(x0, v[0]); x1 = Math.max(x1, v[0]); y0 = Math.min(y0, v[1]); y1 = Math.max(y1, v[1]); }
     exactSheetSize = Math.max(x1 - x0, y1 - y0) || 1;
@@ -175,10 +206,11 @@ function prepareExactFold(fold: FoldFormat, mode: ExactFoldMode): { player: Exac
     }
     return {
       player,
-      info: { ...info, available: true, active, layers: first.layerCount, timeMs: first.timeMs },
+      info: { ...info, available: true, active, layers: first.layerCount, timeMs: first.timeMs, reassigned: first.reassigned.length || undefined },
+      fold,
     };
   } catch (e) {
-    return { player: null, info: { ...info, reason: (e as Error).message } };
+    return { player: null, info: { ...info, reason: (e as Error).message }, fold };
   }
 }
 
@@ -304,7 +336,7 @@ function runPhysicsTick() {
     (anySolver.fixedVertices && anySolver.fixedVertices.size > 0);
 
   if (!driver || driver.mesh !== mesh) {
-    driver = new FoldDriver(mesh, solver);
+    driver = newDriver(mesh, solver);
     driver.jumpTo(currentAlpha);
   }
   driver.setSolver(solver);
@@ -351,6 +383,7 @@ function runPhysicsTick() {
       maxResidualForce: maxResForce,
       maxStrain,
       converged: isConverged,
+      foldLimit: driver.limit,
       alpha: currentAlpha,
       targetAlpha,
       stepCount: stepCounter,
@@ -488,14 +521,17 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
         lastLoadRequest = req;
         parkedExactPlayer = null;
         const exact = prepareExactFold(req.fold, req.exactFold ?? 'auto');
+        // possibly with mountains/valleys swapped so it folds flat (exact.info.reassigned)
+        const loaded = exact.fold;
         // The exact fold moves the crease-pattern vertices, so build the mesh on them directly.
-        mesh = createMeshFromFold(req.fold, exact.player ? { ...options, targetEdgeLength: undefined } : options);
-        exactPlayer = exact.player && mesh.numVertices === req.fold.vertices_coords.length ? exact.player : null;
+        mesh = createMeshFromFold(loaded, exact.player ? { ...options, targetEdgeLength: undefined } : options);
+        exactPlayer = exact.player && mesh.numVertices === loaded.vertices_coords.length ? exact.player : null;
         exactInfo = exactPlayer ? exact.info : { ...exact.info, active: false };
+        foldIsImpossible = !exact.info.available && !!exact.info.reason && /stacking|tear/.test(exact.info.reason);
         relaxBake = exactPlayer ? createRelaxBake(exactPlayer, mesh) : null;
         const sOpts = req.solverOptions ?? {};
         solver = buildSolver(mesh, sOpts);
-        driver = new FoldDriver(mesh, solver);
+        driver = newDriver(mesh, solver);
 
         // Seed microscopic out-of-plane perturbation at center (physics only)
         if (!exactPlayer) {
@@ -503,7 +539,7 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
           mesh.positions[center * 3 + 2] = 0.01;
         }
 
-        currentFold = req.fold;
+        currentFold = loaded;
         currentMeshOptions = options;
         currentPhysicsParams = sOpts;
         undoStack.length = 0;
@@ -732,7 +768,7 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
 
         // Recreate solver with new mesh
         solver = buildSolver(newMesh, currentPhysicsParams ?? {});
-        driver = new FoldDriver(newMesh, solver);
+        driver = newDriver(newMesh, solver);
         driver.jumpTo(currentAlpha);
 
         isAwaitingBuffer = false;
@@ -765,7 +801,7 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
           currentFold = prev.fold;
 
           solver = buildSolver(mesh, currentPhysicsParams ?? {});
-          driver = new FoldDriver(mesh, solver);
+          driver = newDriver(mesh, solver);
           driver.jumpTo(currentAlpha);
 
           isAwaitingBuffer = false;
@@ -791,7 +827,7 @@ self.onmessage = (e: MessageEvent<WorkerRequest>) => {
           currentFold = next.fold;
 
           solver = buildSolver(mesh, currentPhysicsParams ?? {});
-          driver = new FoldDriver(mesh, solver);
+          driver = newDriver(mesh, solver);
           driver.jumpTo(currentAlpha);
 
           isAwaitingBuffer = false;

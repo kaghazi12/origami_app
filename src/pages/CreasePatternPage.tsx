@@ -2,6 +2,7 @@ import React, { useState, useEffect, useRef, useCallback, useMemo } from 'react'
 import {
   ArrowDownToLine,
   ChevronDown,
+  FileDown,
   FileUp,
   FoldVertical,
   Hand,
@@ -113,9 +114,12 @@ function getOrigamiProfiling() {
  */
 const FileCheck: React.FC<{
   report: FoldReport;
-  exact?: { active: boolean; available: boolean; reason?: string };
+  exact?: { active: boolean; available: boolean; reason?: string; reassigned?: number };
   folding: boolean;
-}> = ({ report, exact, folding }) => {
+  /** Save the open pattern as it's folded (with any corrections). */
+  onDownload?: () => void;
+}> = ({ report, exact, folding, onDownload }) => {
+  const swapped = !folding && exact?.reassigned ? exact.reassigned : 0;
   const impossible = report.issues.filter((i) => i.kind === 'impossible');
   const repaired = report.issues.filter((i) => i.kind === 'repaired');
   const notes = report.issues.filter((i) => i.kind === 'note');
@@ -130,7 +134,7 @@ const FileCheck: React.FC<{
       angleProblem = 'There is no order of layers that lets this pattern lie flat without paper passing through paper.';
     }
   }
-  if (!impossible.length && !repaired.length && !notes.length && !angleProblem) {
+  if (!impossible.length && !repaired.length && !notes.length && !angleProblem && !swapped) {
     return (
       <div className="space-y-2 border-t border-line px-5 py-5">
         <h2 className="text-sm font-semibold text-ink">File check</h2>
@@ -149,6 +153,17 @@ const FileCheck: React.FC<{
       {angleProblem && (
         <Callout title="The model can’t match this file exactly.">
           {angleProblem} It is folded as close as the paper allows.
+        </Callout>
+      )}
+      {swapped > 0 && (
+        <Callout tone="info" title={`${swapped} ${swapped === 1 ? 'crease was' : 'creases were'} mountain/valley the wrong way round.`}>
+          With the file’s assignment no order of layers lets the paper lie flat. These creases were swapped so it folds
+          completely; the crease pattern above shows the corrected assignment.
+          {onDownload && (
+            <Button size="sm" icon={FileDown} className="mt-2" onClick={onDownload}>
+              Download corrected file
+            </Button>
+          )}
         </Callout>
       )}
       {repaired.map((i) => (
@@ -827,6 +842,8 @@ export const CreasePatternPage: React.FC = () => {
     [flat],
   );
   const exact = loadedInfo?.exact;
+  // a pattern that can't fold flat stops where it jams (the worker's FoldDriver limit)
+  const foldLimit = !exact?.active && stats?.foldLimit !== undefined && stats.foldLimit < 0.999 ? stats.foldLimit : null;
   const settling = !!stats && !isConverged && !folding;
 
   return (
@@ -935,13 +952,28 @@ export const CreasePatternPage: React.FC = () => {
                   ? exact.layers && exact.layers > 1
                     ? `Folded exactly, ${exact.layers.toLocaleString()} layers. Grab the paper to loosen it.`
                     : 'Folded exactly to the angles in the file. Grab the paper to bend it.'
-                  : 'Folded by simulation. Grab and pull the paper to shape it.'}
+                  : foldLimit !== null
+                    ? `Folded by simulation. This pattern jams at ${(foldLimit * 100).toFixed(0)}%: folding further would stretch the paper or push it through itself.`
+                    : 'Folded by simulation. Grab and pull the paper to shape it.'}
               </p>
             )}
           </div>
 
           {/* what's wrong with the file, and what was repaired */}
-          <FileCheck report={report} exact={exact} folding={folding} />
+          <FileCheck
+            report={report}
+            exact={exact}
+            folding={folding}
+            onDownload={() => {
+              const name = `${title.replace(/[\/:*?"<>|]+/g, ' ').trim() || 'pattern'} (corrected).fold`;
+              const blob = new Blob([JSON.stringify({ ...currentFold, file_title: `${title} (corrected)` }, null, 1)], { type: 'application/json' });
+              const a = document.createElement('a');
+              a.href = URL.createObjectURL(blob);
+              a.download = name;
+              a.click();
+              setTimeout(() => URL.revokeObjectURL(a.href), 1000);
+            }}
+          />
 
           {/* developer panel: engine settings and numbers, hidden by default */}
           <div className="mt-auto border-t border-line">
@@ -1231,13 +1263,16 @@ export const CreasePatternPage: React.FC = () => {
                   }}
                 />
               </div>
-              <span className="hidden w-24 shrink-0 text-right text-xs tabular-nums text-ink-muted sm:inline">Folded {(alpha * 100).toFixed(0)}%</span>
+              <span className="hidden w-24 shrink-0 text-right text-xs tabular-nums text-ink-muted sm:inline">
+                {foldLimit !== null && alpha > foldLimit ? `Stops at ${(foldLimit * 100).toFixed(0)}%` : `Folded ${(alpha * 100).toFixed(0)}%`}
+              </span>
               <Scrubber
                 label="Fold amount"
                 valueText={`${(alpha * 100).toFixed(0)} percent folded`}
                 value={alpha}
                 max={1}
                 step={0.005}
+                ticks={foldLimit !== null ? [foldLimit] : undefined}
                 onChange={(v) => {
                   setIsPlaying(false);
                   handleAlphaChange(v);

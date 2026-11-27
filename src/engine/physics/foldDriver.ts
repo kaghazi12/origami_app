@@ -11,6 +11,10 @@
  *   jammed layers keep feeding in, and after FREEZE_TICKS the model stops. Before, an impossible
  *   pattern jittered and drifted for ever after 100%.
  * - While the user holds the paper nothing is frozen or damped extra.
+ * - A pattern that can't fold flat at all (the exact folder found no layer order, or the creases
+ *   tear) jams part way: pushing on made each frame take seconds and pushed paper through paper.
+ *   With `jamStrain` set, the fold stops where the paper starts to stretch (`limit`) and backs off
+ *   a little. Valid patterns never get a limit, so they always reach the slider value.
  */
 
 import { TriMesh } from '../types';
@@ -27,6 +31,16 @@ export const FREEZE_TICKS = 180;
 export const FREEZE_MS = 3000;
 /** Kinetic energy per vertex below which the paper counts as at rest. */
 const REST_KE_PER_VERTEX = 1e-9;
+/** Frames in a row over the jam strain before the fold counts as jammed. */
+const JAM_TICKS = 6;
+/** How far the fold backs off from where it jammed, in frames of folding. */
+const JAM_BACKOFF_TICKS = 4;
+
+export interface FoldDriverOptions {
+  maxDegPerTick?: number;
+  /** Stop folding when paper strain stays above this (impossible patterns only). Off by default. */
+  jamStrain?: number | null;
+}
 
 export class FoldDriver {
   alpha = 0;
@@ -43,8 +57,15 @@ export class FoldDriver {
   private readonly maxRate: number;
   /** Clock time of the previous tick, so the fold speed is per second, not per frame. */
   private lastTickAt: number | null = null;
+  /** The furthest the pattern folds before jamming (1 = no limit). */
+  limit = 1;
+  private readonly jamStrain: number | null;
+  private overStrain = 0;
 
-  constructor(readonly mesh: TriMesh, private solver: FoldSolver, maxDegPerTick = MAX_DEG_PER_TICK) {
+  constructor(readonly mesh: TriMesh, private solver: FoldSolver, opts: FoldDriverOptions | number = {}) {
+    const o = typeof opts === 'number' ? { maxDegPerTick: opts } : opts;
+    const maxDegPerTick = o.maxDegPerTick ?? MAX_DEG_PER_TICK;
+    this.jamStrain = o.jamStrain ?? null;
     let maxTarget = 0;
     for (const h of mesh.hinges) {
       if (h.assignment === 'M' || h.assignment === 'V') maxTarget = Math.max(maxTarget, Math.abs(h.targetAngle));
@@ -58,8 +79,17 @@ export class FoldDriver {
 
   /** Move the slider. */
   setTarget(alpha: number) {
-    this.target = Math.max(0, Math.min(1, alpha));
+    const t = Math.max(0, Math.min(this.limit, alpha));
+    // a jammed pattern keeps being asked for the slider's value: only a real change wakes it,
+    // or it would never settle and stop
+    if (t === this.target && this.jammed) return;
+    this.target = t;
     this.wake();
+  }
+
+  /** The pattern jammed: it folds no further than `limit`. */
+  get jammed() {
+    return this.limit < 1;
   }
 
   /** Something changed (slider, grab, settings): run physics again. */
@@ -72,7 +102,7 @@ export class FoldDriver {
 
   /** Jump without animating (e.g. after a reset). */
   jumpTo(alpha: number) {
-    this.alpha = this.target = Math.max(0, Math.min(1, alpha));
+    this.alpha = this.target = Math.max(0, Math.min(this.limit, alpha));
     rampRestAngles(this.mesh, this.alpha);
     this.wake();
   }
@@ -109,6 +139,16 @@ export class FoldDriver {
     }
 
     this.solver.step(dt);
+
+    // An impossible pattern stretches the paper once it jams: stop there and back off a little.
+    if (this.jamStrain !== null && !holding && this.target > this.alpha - 1e-9 && !this.atTargetAlpha) {
+      this.overStrain = this.solver.getMaxStrain() > this.jamStrain ? this.overStrain + 1 : 0;
+      if (this.overStrain >= JAM_TICKS) {
+        this.limit = Math.max(0, this.alpha - this.maxRate * JAM_BACKOFF_TICKS);
+        this.target = this.limit;
+        this.overStrain = 0;
+      }
+    }
 
     if (!holding && this.atTargetAlpha) {
       const v = this.mesh.velocities;

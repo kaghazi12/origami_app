@@ -113,12 +113,17 @@ describe('exact crease-pattern folding', () => {
     expect(foldCreasePattern(load('bird-base.fold').cp).ok).toBe(true);
   });
 
-  it('refuses a pattern that cannot lie flat, and says why', () => {
+  it('refuses a mountain/valley assignment that cannot lie flat, and says why', () => {
     // The built-in preliminary base template folds all 8 centre creases (4 V + 4 M), which breaks
     // Maekawa's theorem (|M - V| must be 2), so no flat stacking exists.
     const pre = createPreliminaryBasePattern(1);
-    const r = foldCreasePattern({ vertices_coords: pre.vertices_coords as number[][], edges_vertices: pre.edges_vertices, edges_assignment: pre.edges_assignment, faces_vertices: pre.faces_vertices! });
+    const cp = { vertices_coords: pre.vertices_coords as number[][], edges_vertices: pre.edges_vertices, edges_assignment: pre.edges_assignment, faces_vertices: pre.faces_vertices! };
+    const r = foldCreasePattern(cp, { reassign: false });
     expect(r.ok).toBe(false);
     expect(r.reason).toMatch(/stacking/);
+    // by default it swaps the fewest creases it can so the pattern folds: here one is enough
+    const fixed = foldCreasePattern(cp);
+    expect(fixed.ok).toBe(true);
+    expect(fixed.reassigned).toHaveLength(1);
   });
 });

@@ -48,6 +48,8 @@ export interface LayerInput {
   joints?: FlatJoint[];
   known?: (i: number, j: number) => boolean | undefined;
   prefer?: (i: number, j: number) => boolean | undefined;
+  /** Decide the pairs that have a preference before any other (so the preferences mostly hold). */
+  preferFirst?: boolean;
   maxConflicts?: number;
 }
 
@@ -76,6 +78,8 @@ function dpll(
   clauses: number[][],
   preferred: (v: number) => boolean,
   maxConflicts: number,
+  /** Decide these variables first, in this order (the rest follow by index). */
+  firstVars: number[] = [],
 ): Int8Array | null {
   const assign = new Int8Array(nVars); // 0 unassigned, 1 true, -1 false
   const occ: number[][] = Array.from({ length: 2 * nVars }, () => []);
@@ -130,10 +134,15 @@ function dpll(
     while (trail.length > pos) assign[Math.abs(trail.pop()!) - 1] = 0;
     qhead = trail.length;
   };
+  // decision order: firstVars, then every variable by index
+  const order = firstVars.length ? [...firstVars, ...Array.from({ length: nVars }, (_, v) => v)] : null;
+  const total = order ? order.length : nVars;
+  const varAt = (k: number) => (order ? order[k] : k);
   for (;;) {
-    while (next < nVars && assign[next] !== 0) next++;
-    if (next >= nVars) return assign;
-    const lit = preferred(next) ? next + 1 : -(next + 1);
+    while (next < total && assign[varAt(next)] !== 0) next++;
+    if (next >= total) return assign;
+    const v = varAt(next);
+    const lit = preferred(v) ? v + 1 : -(v + 1);
     stack.push({ lit, flipped: false, trailPos: trail.length });
     set(lit);
     while (!propagate()) {
@@ -313,6 +322,9 @@ export function solveLayers(input: LayerInput): LayerResult {
 
   lap('tacos');
   const prefer = input.prefer;
+  // pairs with a stated preference are decided first, so the preference wins wherever it can
+  // (otherwise propagation from earlier decisions settles most of them before they're reached)
+  const firstVars = input.preferFirst && prefer ? pairs.map(([i, j], v) => (prefer(i, j) === undefined ? -1 : v)).filter((v) => v >= 0) : [];
   const assignment = dpll(
     pairs.length,
     cl.lits,
@@ -322,6 +334,7 @@ export function solveLayers(input: LayerInput): LayerResult {
       return p === undefined ? true : p;
     },
     input.maxConflicts ?? 20000,
+    firstVars,
   );
   lap('search');
   if (!assignment) {

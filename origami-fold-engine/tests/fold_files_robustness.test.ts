@@ -128,13 +128,22 @@ describe('XPBD solver', () => {
   });
 });
 
+/** Whether the exact folder can fold this pattern (the worker limits impossible ones where they jam). */
+function foldsExactly(fold: FoldFormat): boolean {
+  return foldCreasePattern({
+    vertices_coords: fold.vertices_coords as number[][], edges_vertices: fold.edges_vertices,
+    edges_assignment: fold.edges_assignment, edges_foldAngle: fold.edges_foldAngle, faces_vertices: fold.faces_vertices!,
+  }, { layerGap: 0 }).ok;
+}
+
 /** The app's physics path: prepared fold -> mesh -> solver -> FoldDriver, as the worker runs it. */
-function foldToTheEnd(raw: unknown) {
+function foldToTheEnd(raw: unknown, opts: { impossible?: boolean } = {}) {
   const { fold } = prepareFold(raw);
+  const impossible = opts.impossible ?? !foldsExactly(fold);
   const mesh = createMeshFromFold(fold, { axialStiffness: 40000, creaseStiffness: 40, facetStiffness: 200, targetEdgeLength: 0.1, refine: process.env.NO_REFINE ? false : undefined });
   const solver = new XPBDSolver(mesh, { substeps: 20, iterations: 2, bendingCompliance: 0.0005, enablePlasticity: false, enableSelfCollision: true });
   mesh.positions[Math.floor(mesh.numVertices / 2) * 3 + 2] = 0.01;
-  const driver = new FoldDriver(mesh, solver);
+  const driver = new FoldDriver(mesh, solver, { jamStrain: impossible ? 0.05 : null });
   let tick = 0;
   // a fixed clock so the result doesn't depend on machine speed
   driver.now = () => tick * 16;
@@ -142,7 +151,7 @@ function foldToTheEnd(raw: unknown) {
   let reachedAt = -1, worstIx = 0;
   for (; tick < 600 && !driver.frozen; tick++) {
     driver.tick(0.016);
-    if (reachedAt < 0 && driver.atTargetAlpha) reachedAt = tick;
+    if (reachedAt < 0 && driver.atTargetAlpha && driver.alpha > 0) reachedAt = tick;
     if (tick % 25 === 0) worstIx = Math.max(worstIx, countMeshIntersections(mesh.positions, mesh.indices, mesh.numTriangles).intersectionCount);
   }
   const frozenPose = Float64Array.from(mesh.positions);
@@ -155,25 +164,82 @@ function foldToTheEnd(raw: unknown) {
     err += Math.abs(computeDihedralAngle(h, mesh.positions, false) - h.targetAngle); n++;
   }
   return {
+    impossible, limit: driver.limit, alpha: driver.alpha,
     reachedAt, frozenAt: driver.frozen ? tick : -1, moved, worstIx,
     endIx: countMeshIntersections(mesh.positions, mesh.indices, mesh.numTriangles).intersectionCount,
     finite: mesh.positions.every(Number.isFinite), strain: solver.getMaxStrain(), meanErrDeg: ((err / Math.max(1, n)) * 180) / Math.PI,
   };
 }
 
-describe('every bundled FOLD file folds to 100%, stops, and never passes through itself', () => {
-  const files = fs.readdirSync(DESIGNS).filter((f) => f.endsWith('.fold') && f !== 'test-3.fold'); // test-3 folds exactly (crease_pattern_fold.test.ts)
+describe('every FOLD file the app folds by physics reaches 100% (or where it jams), stops, and never passes through itself', () => {
+  // The files the app folds from flat by physics: small patterns (24 creases or fewer), patterns
+  // the exact folder rejects (they stop where they jam), and the generated stress cases 01_–12_.
+  // Other valid patterns (test-3, box, crease_pattern_1/2) are always folded exactly by the app
+  // (crease_pattern_fold.test.ts); physics from flat jams on them and is never their path.
+  const files = fs.readdirSync(DESIGNS).filter((f) => {
+    if (!f.endsWith('.fold')) return false;
+    if (/^\d\d_/.test(f)) return true;
+    const { fold } = prepareFold(read(f));
+    const creases = fold.edges_assignment.filter((a) => a === 'M' || a === 'V').length;
+    return creases <= 24 || !foldsExactly(fold);
+  });
   it.each(files)('%s', { timeout: 300000 }, (file) => {
     const r = foldToTheEnd(read(file));
     expect(r.finite).toBe(true);
-    expect(r.reachedAt, 'reaches 100%').toBeGreaterThan(0);
+    // a pattern that can't fold flat stops where it jams; every other one reaches 100%
+    if (!r.impossible) expect(r.limit, 'valid patterns are never limited').toBe(1);
+    expect(r.reachedAt, r.impossible ? 'reaches where it jams' : 'reaches 100%').toBeGreaterThan(0);
     expect(r.reachedAt).toBeLessThan(200); // within ~3 s
     expect(r.frozenAt, 'stops').toBeGreaterThan(0);
     expect(r.frozenAt - r.reachedAt).toBeLessThanOrEqual(200); // settles within ~3 s of 100%
     expect(r.moved, 'a stopped model does not move').toBe(0);
     expect(r.worstIx, 'no paper through paper while folding').toBe(0);
     expect(r.endIx, 'no paper through paper at the end').toBe(0);
-    expect(r.strain).toBeLessThan(0.05);
+    expect(r.strain).toBeLessThan(r.impossible ? 0.06 : 0.05);
+  });
+
+  it('crease_pattern_1 and 2 fold exactly as given', () => {
+    expect(foldsExactly(prepareFold(read('crease_pattern_1.fold')).fold)).toBe(true);
+    expect(foldsExactly(prepareFold(read('crease_pattern_2.fold')).fold)).toBe(true);
+  });
+
+  it('crease_pattern_3 folds completely once its wrong-way creases are swapped', { timeout: 120000 }, () => {
+    // Kawasaki and Maekawa hold at every vertex, but with the file's mountains and valleys no layer
+    // order exists (Rabbit Ear's solver agrees). The folded shape doesn't depend on mountain/valley,
+    // so the exact folder finds an assignment that does stack, keeping the file's where it can.
+    const { fold } = prepareFold(read('crease_pattern_3.fold'));
+    const cp = {
+      vertices_coords: fold.vertices_coords as number[][], edges_vertices: fold.edges_vertices,
+      edges_assignment: fold.edges_assignment, edges_foldAngle: fold.edges_foldAngle, faces_vertices: fold.faces_vertices!,
+    };
+    expect(foldCreasePattern(cp, { layerGap: 0, reassign: false }).ok).toBe(false);
+    const t0 = performance.now();
+    const r = foldCreasePattern(cp, { layerGap: 0 });
+    expect(r.ok, r.reason).toBe(true);
+    expect(r.reassigned.length).toBeGreaterThan(0);
+    expect(r.reassigned.length).toBeLessThan(30); // of 216 creases
+    expect(performance.now() - t0).toBeLessThan(10000); // ~1 s; generous for a loaded machine
+    // the corrected file is a valid flat fold as given: no local violations, stacks without help
+    const asg = fold.edges_assignment.slice();
+    const ang = fold.edges_foldAngle!.slice();
+    for (const e of r.reassigned) { asg[e] = asg[e] === 'M' ? 'V' : 'M'; ang[e] = -ang[e]!; }
+    const corrected = { ...fold, edges_assignment: asg, edges_foldAngle: ang };
+    expect(prepareFold(JSON.parse(JSON.stringify(corrected))).report.flatFoldViolations).toBe(0);
+    expect(foldCreasePattern({ ...cp, edges_assignment: asg, edges_foldAngle: ang }, { layerGap: 0, reassign: false }).ok).toBe(true);
+  });
+
+  it('a pattern with no flat fold at all stops where it jams, quickly, without paper through paper', { timeout: 300000 }, () => {
+    // When no assignment stacks (the exact folder gives up), physics folds the file as given.
+    // It used to push on to 100%: on crease_pattern_3's original assignment each frame took
+    // seconds, strain reached 20% and 47 triangles passed through each other.
+    const t0 = performance.now();
+    const r = foldToTheEnd(read('crease_pattern_3.fold'), { impossible: true });
+    expect(r.impossible).toBe(true);
+    expect(r.limit).toBeLessThan(1);
+    expect(r.alpha).toBeCloseTo(r.limit, 9);
+    expect(r.frozenAt).toBeGreaterThan(0);
+    expect(r.endIx).toBe(0);
+    expect(performance.now() - t0).toBeLessThan(120000);
   });
 
   it('a valid flat-foldable pattern (bird base) reaches its crease angles', { timeout: 300000 }, () => {

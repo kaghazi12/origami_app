@@ -65,7 +65,7 @@ export interface PatternEntry {
   title: string;
   /** Short description for the picker. */
   meta: string;
-  group: 'Examples' | 'Bases' | 'Test files' | 'Start from';
+  group: 'Examples' | 'Bases' | 'Test files' | 'Your files' | 'Start from';
   /** The file as given (run it through prepareFold before folding). */
   create: () => FoldFormat;
 }
@@ -87,12 +87,15 @@ const raw: Omit<PatternEntry, 'meta'>[] = [
 ];
 
 /**
- * Every numbered FOLD file in this folder (01_….fold, 02_….fold, ...) is listed as a test file, so
- * new test cases show up in the picker without code changes.
+ * Every other FOLD file in this folder is listed too, so new files show up in the picker without
+ * code changes: numbered ones (01_….fold, generated test cases) under "Test files", the rest
+ * (files you drop in, e.g. crease_pattern_1.fold) under "Your files".
  */
-const testFiles = import.meta.glob('./[0-9][0-9]_*.fold', { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
-for (const [p, text] of Object.entries(testFiles).sort(([a], [b]) => a.localeCompare(b))) {
+const LISTED = new Set(['bird-base.fold', 'box.fold', 'test-3.fold']);
+const otherFiles = import.meta.glob('./*.fold', { query: '?raw', import: 'default', eager: true }) as Record<string, string>;
+for (const [p, text] of Object.entries(otherFiles).sort(([a], [b]) => a.localeCompare(b))) {
   const file = p.replace(/^.*\//, '');
+  if (LISTED.has(file)) continue;
   let title = file.replace(/\.fold$/, '');
   try {
     const j = JSON.parse(text);
@@ -100,7 +103,8 @@ for (const [p, text] of Object.entries(testFiles).sort(([a], [b]) => a.localeCom
   } catch {
     /* listed by file name; opening it will report the problem */
   }
-  raw.push({ id: `test:${file}`, title, group: 'Test files', create: parse(text) });
+  const numbered = /^\d\d_/.test(file);
+  raw.push({ id: `${numbered ? 'test' : 'file'}:${file}`, title, group: numbered ? 'Test files' : 'Your files', create: parse(text) });
 }
 
 const NOTES: Record<string, string> = {
@@ -109,7 +113,7 @@ const NOTES: Record<string, string> = {
 };
 
 /** Crease pattern mode. The meta line is the crease count, computed once. */
-const GROUP_ORDER = ['Examples', 'Bases', 'Test files', 'Start from'];
+const GROUP_ORDER = ['Examples', 'Bases', 'Your files', 'Test files', 'Start from'];
 export const PATTERNS: PatternEntry[] = raw
   .map((p) => {
     if (NOTES[p.id]) return { ...p, meta: NOTES[p.id] };
@@ -119,7 +123,7 @@ export const PATTERNS: PatternEntry[] = raw
     } catch {
       return { ...p, meta: 'Unreadable file' };
     }
-    return { ...p, meta: `${n.toLocaleString()} creases${p.id.startsWith('test:') ? ` · ${p.id.slice(5)}` : ''}` };
+    return { ...p, meta: `${n.toLocaleString()} creases${/^(test|file):/.test(p.id) ? ` · ${p.id.replace(/^\w+:/, '')}` : ''}` };
   })
   .sort((a, b) => GROUP_ORDER.indexOf(a.group) - GROUP_ORDER.indexOf(b.group));
 

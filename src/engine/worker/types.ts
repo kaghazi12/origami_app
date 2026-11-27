@@ -119,6 +119,11 @@ export interface ExactFoldInfo {
   layers?: number;
   creases?: number;
   timeMs?: number;
+  /**
+   * Creases whose mountain/valley was swapped so the pattern folds flat (the file's assignment has
+   * no layer order). The loaded fold already has them swapped.
+   */
+  reassigned?: number;
 }
 
 export interface WorkerFrameStats {
@@ -129,6 +134,8 @@ export interface WorkerFrameStats {
   converged: boolean;
   alpha: number;
   targetAlpha?: number;
+  /** The pattern can't fold flat and jams: the fold goes no further than this (1 = no limit). */
+  foldLimit?: number;
   stepCount: number;
   substepsInTick: number;
   iterationsPerTick?: number;
