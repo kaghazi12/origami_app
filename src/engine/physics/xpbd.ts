@@ -46,6 +46,14 @@ export interface XPBDSolverOptions {
    * Default true.
    */
   removeRigidMotion?: boolean;
+
+  /**
+   * Fast motion gets more substeps: when any vertex moved more than ~2 paper thicknesses per
+   * substep in the last frame (a twist snapping flat, a hard drag), the next frame is split into
+   * up to maxSubstepFactor times the substeps, so layers can't jump past each other between
+   * contact checks. Slow folding stays at `substeps`. Default 4 (1 turns it off).
+   */
+  maxSubstepFactor?: number;
 }
 
 /**
@@ -94,6 +102,10 @@ export class XPBDSolver implements FoldSolver {
   // Phase 9: Self-collision via XPBD
   enableSelfCollision: boolean;
   removeRigidMotion: boolean;
+  maxSubstepFactor: number;
+  /** Largest vertex displacement during the last step() (for adaptive substeps). */
+  private lastStepMaxMove = 0;
+  private stepStart: Float64Array;
   private spatialHash: SpatialHash;
   private selfContacts: ContactData[] = [];
   private selfCollisionMargin: number;
@@ -164,6 +176,8 @@ export class XPBDSolver implements FoldSolver {
     // Phase 9: Self-collision via XPBD
     this.enableSelfCollision = options.enableSelfCollision ?? false;
     this.removeRigidMotion = options.removeRigidMotion ?? true;
+    this.maxSubstepFactor = options.maxSubstepFactor ?? 4;
+    this.stepStart = new Float64Array(mesh.numVertices * 3);
     const margin = options.selfCollisionMargin ?? Math.max(0.05, this.paperThickness * 2);
     this.selfCollisionMargin = margin;
     this.spatialHash = new SpatialHash(margin);
@@ -482,349 +496,389 @@ export class XPBDSolver implements FoldSolver {
       }
     }
 
-    const substepCount = Math.max(1, this.substeps);
-    const h = dt / substepCount;
-    const hSq = h * h;
-    const invH = 1.0 / h;
-    const numV = this.mesh.numVertices;
-    const pos = this.mesh.positions;
-    const vel = this.mesh.velocities;
-    const invMass = this.invMass;
-    const posStar = this.posStar;
+    // Fast motion gets more substeps (see maxSubstepFactor): start from what the last frame
+    // needed, and if this frame moves too far per substep anyway (a snap that starts now), undo
+    // it and run it again finer.
+    const perSubstep = 2 * this.paperThickness;
+    const base = Math.max(1, this.substeps);
+    const maxSub = base * Math.max(1, this.maxSubstepFactor);
+    const adaptive = this.enableSelfCollision && this.maxSubstepFactor > 1;
+    let substepCount = adaptive
+      ? Math.min(maxSub, Math.max(base, Math.ceil(this.lastStepMaxMove / Math.max(perSubstep, 1e-9))))
+      : base;
+    const hinges0 = this.mesh.hinges;
+    const startPos = this.stepStart;
+    startPos.set(this.mesh.positions);
+    const startVel = Float64Array.from(this.mesh.velocities);
+    const startPrev = hinges0.map((hh) => hh.previousAngle);
+    const maxMove = () => {
+      let mm = 0;
+      const p = this.mesh.positions;
+      for (let i = 0; i < p.length; i += 3) {
+        const dx = p[i] - startPos[i], dy = p[i + 1] - startPos[i + 1], dz = p[i + 2] - startPos[i + 2];
+        const d = dx * dx + dy * dy + dz * dz;
+        if (d > mm) mm = d;
+      }
+      return Math.sqrt(mm);
+    };
 
-    const numBars = this.numBars;
-    const barV0 = this.barV0;
-    const barV1 = this.barV1;
-    const barRestLen = this.barRestLen;
+    const runSubsteps = (substepCount: number) => {
+      const h = dt / substepCount;
+      const hSq = h * h;
+      const invH = 1.0 / h;
+      const numV = this.mesh.numVertices;
+      const pos = this.mesh.positions;
+      const vel = this.mesh.velocities;
+      const invMass = this.invMass;
+      const posStar = this.posStar;
 
-    const numHinges = this.numHinges;
-    const hingeV0 = this.hingeV0;
-    const hingeV1 = this.hingeV1;
-    const hingeV2 = this.hingeV2;
-    const hingeV3 = this.hingeV3;
-    const hingeStiffness = this.hingeStiffness;
-    const hingeRestAngle = this.hingeRestAngle;
+      const numBars = this.numBars;
+      const barV0 = this.barV0;
+      const barV1 = this.barV1;
+      const barRestLen = this.barRestLen;
 
-    for (let s = 0; s < substepCount; s++) {
-      // 1. Predict unconstrained positions (with gravity external force if enabled)
-      const gAcc = this.enableGravity ? this.gravity : 0.0;
+      const numHinges = this.numHinges;
+      const hingeV0 = this.hingeV0;
+      const hingeV1 = this.hingeV1;
+      const hingeV2 = this.hingeV2;
+      const hingeV3 = this.hingeV3;
+      const hingeStiffness = this.hingeStiffness;
+      const hingeRestAngle = this.hingeRestAngle;
 
-      for (let i = 0; i < numV; i++) {
-        const i3 = i * 3;
-        const w = invMass[i];
-        if (w === 0.0) {
-          if (this.dragTargets.has(i)) {
-            const t = this.dragTargets.get(i)!;
-            posStar[i3 + 0] = t[0];
-            posStar[i3 + 1] = t[1];
-            posStar[i3 + 2] = t[2];
+      for (let s = 0; s < substepCount; s++) {
+        // 1. Predict unconstrained positions (with gravity external force if enabled)
+        const gAcc = this.enableGravity ? this.gravity : 0.0;
+
+        for (let i = 0; i < numV; i++) {
+          const i3 = i * 3;
+          const w = invMass[i];
+          if (w === 0.0) {
+            if (this.dragTargets.has(i)) {
+              const t = this.dragTargets.get(i)!;
+              posStar[i3 + 0] = t[0];
+              posStar[i3 + 1] = t[1];
+              posStar[i3 + 2] = t[2];
+            } else {
+              posStar[i3 + 0] = pos[i3 + 0];
+              posStar[i3 + 1] = pos[i3 + 1];
+              posStar[i3 + 2] = pos[i3 + 2];
+            }
+            vel[i3 + 0] = 0;
+            vel[i3 + 1] = 0;
+            vel[i3 + 2] = 0;
           } else {
-            posStar[i3 + 0] = pos[i3 + 0];
-            posStar[i3 + 1] = pos[i3 + 1];
-            posStar[i3 + 2] = pos[i3 + 2];
-          }
-          vel[i3 + 0] = 0;
-          vel[i3 + 1] = 0;
-          vel[i3 + 2] = 0;
-        } else {
-          posStar[i3 + 0] = pos[i3 + 0] + h * vel[i3 + 0];
-          posStar[i3 + 1] = pos[i3 + 1] + h * vel[i3 + 1];
-          posStar[i3 + 2] = pos[i3 + 2] + h * vel[i3 + 2] - gAcc * hSq;
-        }
-      }
-
-      // Self-collision detection, once per substep, on the committed (non-penetrating) positions.
-      // The proximity radius is padded by this substep's predicted motion so that features which
-      // will meet during the step are caught before they cross (prevents tunnelling).
-      if (this.enableSelfCollision) {
-        let maxDispSq = 0;
-        for (let i = 0; i < numV * 3; i += 3) {
-          const dx = posStar[i] - pos[i], dy = posStar[i + 1] - pos[i + 1], dz = posStar[i + 2] - pos[i + 2];
-          const d2 = dx * dx + dy * dy + dz * dz;
-          if (d2 > maxDispSq) maxDispSq = d2;
-        }
-        const t = this.paperThickness;
-        const radius = Math.min(this.selfCollisionMargin, Math.max(2 * t, t + 2 * Math.sqrt(maxDispSq)));
-        this.spatialHash.build(pos, this.mesh.indices, this.mesh.numTriangles, radius);
-        const pairs = this.spatialHash.queryCandidatePairs();
-        this.contactGen.generate(pairs, pos, t, radius, this.selfContacts);
-      } else if (this.selfContacts.length > 0) {
-        this.selfContacts.length = 0;
-      }
-
-      // Reset Lagrange multipliers for this substep
-      this.lambdaBars.fill(0);
-      this.lambdaHinges.fill(0);
-
-      // 2. Constraint Projection Loop
-      for (let iter = 0; iter < this.iterations; iter++) {
-        // --- 0. Barycentric Pin & Drag Constraints ---
-        this.projectBarycentric(posStar, hSq);
-
-        // --- A. Dihedral Bending Constraints (Hinges - compliant XPBD) ---
-        // Projected first so that distance constraints enforce strict inextensibility at the end
-        for (let hi = 0; hi < numHinges; hi++) {
-          const kH = hingeStiffness[hi];
-          if (kH <= 0 && this.bendingCompliance === undefined) continue;
-
-          const i0 = hingeV0[hi];
-          const i1 = hingeV1[hi];
-          const i2 = hingeV2[hi];
-          const i3 = hingeV3[hi];
-
-          const w0 = invMass[i0];
-          const w1 = invMass[i1];
-          const w2 = invMass[i2];
-          const w3 = invMass[i3];
-          if (w0 + w1 + w2 + w3 === 0.0) continue;
-
-          const p0 = i0 * 3, p1 = i1 * 3, p2 = i2 * 3, p3 = i3 * 3;
-
-          const ex = posStar[p1 + 0] - posStar[p0 + 0];
-          const ey = posStar[p1 + 1] - posStar[p0 + 1];
-          const ez = posStar[p1 + 2] - posStar[p0 + 2];
-          const eLenSq = ex * ex + ey * ey + ez * ez;
-          if (eLenSq < 1e-14) continue;
-          const eLen = Math.sqrt(eLenSq);
-
-          const u2x = posStar[p2 + 0] - posStar[p0 + 0];
-          const u2y = posStar[p2 + 1] - posStar[p0 + 1];
-          const u2z = posStar[p2 + 2] - posStar[p0 + 2];
-
-          const n1x = ey * u2z - ez * u2y;
-          const n1y = ez * u2x - ex * u2z;
-          const n1z = ex * u2y - ey * u2x;
-          const a1Sq = n1x * n1x + n1y * n1y + n1z * n1z;
-          if (a1Sq < 1e-14) continue;
-
-          const u3x = posStar[p3 + 0] - posStar[p0 + 0];
-          const u3y = posStar[p3 + 1] - posStar[p0 + 1];
-          const u3z = posStar[p3 + 2] - posStar[p0 + 2];
-
-          const n2x = u3y * ez - u3z * ey;
-          const n2y = u3z * ex - u3x * ez;
-          const n2z = u3x * ey - u3y * ex;
-          const a2Sq = n2x * n2x + n2y * n2y + n2z * n2z;
-          if (a2Sq < 1e-14) continue;
-
-          const theta = computeDihedralAngle(this.mesh.hinges[hi], posStar, false);
-
-          const target = hingeRestAngle[hi];
-          const C = theta - target;
-          if (Math.abs(C) < 1e-7) continue;
-
-          // Regularized gradients
-          const minASq = eLenSq * 1e-6;
-          const regA1Sq = a1Sq < minASq ? minASq : a1Sq;
-          const regA2Sq = a2Sq < minASq ? minASq : a2Sq;
-
-          const q2Factor = eLen / regA1Sq;
-          const q2x = q2Factor * n1x, q2y = q2Factor * n1y, q2z = q2Factor * n1z;
-
-          const q3Factor = eLen / regA2Sq;
-          const q3x = q3Factor * n2x, q3y = q3Factor * n2y, q3z = q3Factor * n2z;
-
-          const invELenSq = 1.0 / eLenSq;
-          const t2 = (u2x * ex + u2y * ey + u2z * ez) * invELenSq;
-          const t3 = (u3x * ex + u3y * ey + u3z * ez) * invELenSq;
-
-          const omt2 = -(1.0 - t2);
-          const omt3 = -(1.0 - t3);
-          const q0x = omt2 * q2x + omt3 * q3x;
-          const q0y = omt2 * q2y + omt3 * q3y;
-          const q0z = omt2 * q2z + omt3 * q3z;
-
-          const mt2 = -t2;
-          const mt3 = -t3;
-          const q1x = mt2 * q2x + mt3 * q3x;
-          const q1y = mt2 * q2y + mt3 * q3y;
-          const q1z = mt2 * q2z + mt3 * q3z;
-
-          const gradLenSq0 = q0x * q0x + q0y * q0y + q0z * q0z;
-          const gradLenSq1 = q1x * q1x + q1y * q1y + q1z * q1z;
-          const gradLenSq2 = q2x * q2x + q2y * q2y + q2z * q2z;
-          const gradLenSq3 = q3x * q3x + q3y * q3y + q3z * q3z;
-
-          const wGradSum = w0 * gradLenSq0 + w1 * gradLenSq1 + w2 * gradLenSq2 + w3 * gradLenSq3;
-          if (wGradSum < 1e-12) continue;
-
-          // XPBD compliance: alphaTilde = alpha / h^2
-          const alphaTilde = (this.bendingCompliance !== undefined && this.hingeIsFacet[hi] === 1)
-            ? (this.bendingCompliance / hSq)
-            : ((1.0 / kH) / hSq);
-
-          const deltaLambda = (-C - alphaTilde * this.lambdaHinges[hi]) / (wGradSum + alphaTilde);
-          this.lambdaHinges[hi] += deltaLambda;
-
-          if (w0 > 0) {
-            const f0 = w0 * deltaLambda;
-            posStar[p0 + 0] += f0 * q0x;
-            posStar[p0 + 1] += f0 * q0y;
-            posStar[p0 + 2] += f0 * q0z;
-          }
-          if (w1 > 0) {
-            const f1 = w1 * deltaLambda;
-            posStar[p1 + 0] += f1 * q1x;
-            posStar[p1 + 1] += f1 * q1y;
-            posStar[p1 + 2] += f1 * q1z;
-          }
-          if (w2 > 0) {
-            const f2 = w2 * deltaLambda;
-            posStar[p2 + 0] += f2 * q2x;
-            posStar[p2 + 1] += f2 * q2y;
-            posStar[p2 + 2] += f2 * q2z;
-          }
-          if (w3 > 0) {
-            const f3 = w3 * deltaLambda;
-            posStar[p3 + 0] += f3 * q3x;
-            posStar[p3 + 1] += f3 * q3y;
-            posStar[p3 + 2] += f3 * q3z;
+            posStar[i3 + 0] = pos[i3 + 0] + h * vel[i3 + 0];
+            posStar[i3 + 1] = pos[i3 + 1] + h * vel[i3 + 1];
+            posStar[i3 + 2] = pos[i3 + 2] + h * vel[i3 + 2] - gAcc * hSq;
           }
         }
 
-        // --- B. Table Plane Contact & Coulomb Friction Constraint (contact is at z >= tableZ + paperThickness / 2) ---
-        if (this.enableTable) {
-          const zContact = this.tableZ + this.paperThickness * 0.5;
-          for (let i = 0; i < numV; i++) {
-            const w = invMass[i];
-            if (w === 0.0) continue;
-            const i3 = i * 3;
-            const zPred = posStar[i3 + 2];
-            if (zPred < zContact) {
-              const deltaZ = zContact - zPred;
-              posStar[i3 + 2] = zContact;
+        // Self-collision detection, once per substep, on the committed (non-penetrating) positions.
+        // The proximity radius is padded by this substep's predicted motion so that features which
+        // will meet during the step are caught before they cross (prevents tunnelling).
+        if (this.enableSelfCollision) {
+          let maxDispSq = 0;
+          for (let i = 0; i < numV * 3; i += 3) {
+            const dx = posStar[i] - pos[i], dy = posStar[i + 1] - pos[i + 1], dz = posStar[i + 2] - pos[i + 2];
+            const d2 = dx * dx + dy * dy + dz * dz;
+            if (d2 > maxDispSq) maxDispSq = d2;
+          }
+          const t = this.paperThickness;
+          const radius = Math.min(this.selfCollisionMargin, Math.max(2 * t, t + 2 * Math.sqrt(maxDispSq)));
+          this.spatialHash.build(pos, this.mesh.indices, this.mesh.numTriangles, radius);
+          const pairs = this.spatialHash.queryCandidatePairs();
+          this.contactGen.generate(pairs, pos, t, radius, this.selfContacts);
+        } else if (this.selfContacts.length > 0) {
+          this.selfContacts.length = 0;
+        }
 
-              // Tangential motion over this substep
-              const dx = posStar[i3 + 0] - pos[i3 + 0];
-              const dy = posStar[i3 + 1] - pos[i3 + 1];
-              const dTangent = Math.hypot(dx, dy);
+        // Reset Lagrange multipliers for this substep
+        this.lambdaBars.fill(0);
+        this.lambdaHinges.fill(0);
 
-              if (dTangent > 1e-12) {
-                if (dTangent <= this.muStatic * deltaZ) {
-                  // Static friction arrest
-                  posStar[i3 + 0] = pos[i3 + 0];
-                  posStar[i3 + 1] = pos[i3 + 1];
-                } else {
-                  // Kinetic friction reduction in proportion to contact normal correction
-                  const reduction = Math.min(1.0, (this.muKinetic * deltaZ) / dTangent);
-                  posStar[i3 + 0] -= dx * reduction;
-                  posStar[i3 + 1] -= dy * reduction;
+        // 2. Constraint Projection Loop
+        for (let iter = 0; iter < this.iterations; iter++) {
+          // --- 0. Barycentric Pin & Drag Constraints ---
+          this.projectBarycentric(posStar, hSq);
+
+          // --- A. Dihedral Bending Constraints (Hinges - compliant XPBD) ---
+          // Projected first so that distance constraints enforce strict inextensibility at the end
+          for (let hi = 0; hi < numHinges; hi++) {
+            const kH = hingeStiffness[hi];
+            if (kH <= 0 && this.bendingCompliance === undefined) continue;
+
+            const i0 = hingeV0[hi];
+            const i1 = hingeV1[hi];
+            const i2 = hingeV2[hi];
+            const i3 = hingeV3[hi];
+
+            const w0 = invMass[i0];
+            const w1 = invMass[i1];
+            const w2 = invMass[i2];
+            const w3 = invMass[i3];
+            if (w0 + w1 + w2 + w3 === 0.0) continue;
+
+            const p0 = i0 * 3, p1 = i1 * 3, p2 = i2 * 3, p3 = i3 * 3;
+
+            const ex = posStar[p1 + 0] - posStar[p0 + 0];
+            const ey = posStar[p1 + 1] - posStar[p0 + 1];
+            const ez = posStar[p1 + 2] - posStar[p0 + 2];
+            const eLenSq = ex * ex + ey * ey + ez * ez;
+            if (eLenSq < 1e-14) continue;
+            const eLen = Math.sqrt(eLenSq);
+
+            const u2x = posStar[p2 + 0] - posStar[p0 + 0];
+            const u2y = posStar[p2 + 1] - posStar[p0 + 1];
+            const u2z = posStar[p2 + 2] - posStar[p0 + 2];
+
+            const n1x = ey * u2z - ez * u2y;
+            const n1y = ez * u2x - ex * u2z;
+            const n1z = ex * u2y - ey * u2x;
+            const a1Sq = n1x * n1x + n1y * n1y + n1z * n1z;
+            if (a1Sq < 1e-14) continue;
+
+            const u3x = posStar[p3 + 0] - posStar[p0 + 0];
+            const u3y = posStar[p3 + 1] - posStar[p0 + 1];
+            const u3z = posStar[p3 + 2] - posStar[p0 + 2];
+
+            const n2x = u3y * ez - u3z * ey;
+            const n2y = u3z * ex - u3x * ez;
+            const n2z = u3x * ey - u3y * ex;
+            const a2Sq = n2x * n2x + n2y * n2y + n2z * n2z;
+            if (a2Sq < 1e-14) continue;
+
+            const theta = computeDihedralAngle(this.mesh.hinges[hi], posStar, false);
+
+            const target = hingeRestAngle[hi];
+            const C = theta - target;
+            if (Math.abs(C) < 1e-7) continue;
+
+            // Regularized gradients
+            const minASq = eLenSq * 1e-6;
+            const regA1Sq = a1Sq < minASq ? minASq : a1Sq;
+            const regA2Sq = a2Sq < minASq ? minASq : a2Sq;
+
+            const q2Factor = eLen / regA1Sq;
+            const q2x = q2Factor * n1x, q2y = q2Factor * n1y, q2z = q2Factor * n1z;
+
+            const q3Factor = eLen / regA2Sq;
+            const q3x = q3Factor * n2x, q3y = q3Factor * n2y, q3z = q3Factor * n2z;
+
+            const invELenSq = 1.0 / eLenSq;
+            const t2 = (u2x * ex + u2y * ey + u2z * ez) * invELenSq;
+            const t3 = (u3x * ex + u3y * ey + u3z * ez) * invELenSq;
+
+            const omt2 = -(1.0 - t2);
+            const omt3 = -(1.0 - t3);
+            const q0x = omt2 * q2x + omt3 * q3x;
+            const q0y = omt2 * q2y + omt3 * q3y;
+            const q0z = omt2 * q2z + omt3 * q3z;
+
+            const mt2 = -t2;
+            const mt3 = -t3;
+            const q1x = mt2 * q2x + mt3 * q3x;
+            const q1y = mt2 * q2y + mt3 * q3y;
+            const q1z = mt2 * q2z + mt3 * q3z;
+
+            const gradLenSq0 = q0x * q0x + q0y * q0y + q0z * q0z;
+            const gradLenSq1 = q1x * q1x + q1y * q1y + q1z * q1z;
+            const gradLenSq2 = q2x * q2x + q2y * q2y + q2z * q2z;
+            const gradLenSq3 = q3x * q3x + q3y * q3y + q3z * q3z;
+
+            const wGradSum = w0 * gradLenSq0 + w1 * gradLenSq1 + w2 * gradLenSq2 + w3 * gradLenSq3;
+            if (wGradSum < 1e-12) continue;
+
+            // XPBD compliance: alphaTilde = alpha / h^2
+            const alphaTilde = (this.bendingCompliance !== undefined && this.hingeIsFacet[hi] === 1)
+              ? (this.bendingCompliance / hSq)
+              : ((1.0 / kH) / hSq);
+
+            const deltaLambda = (-C - alphaTilde * this.lambdaHinges[hi]) / (wGradSum + alphaTilde);
+            this.lambdaHinges[hi] += deltaLambda;
+
+            if (w0 > 0) {
+              const f0 = w0 * deltaLambda;
+              posStar[p0 + 0] += f0 * q0x;
+              posStar[p0 + 1] += f0 * q0y;
+              posStar[p0 + 2] += f0 * q0z;
+            }
+            if (w1 > 0) {
+              const f1 = w1 * deltaLambda;
+              posStar[p1 + 0] += f1 * q1x;
+              posStar[p1 + 1] += f1 * q1y;
+              posStar[p1 + 2] += f1 * q1z;
+            }
+            if (w2 > 0) {
+              const f2 = w2 * deltaLambda;
+              posStar[p2 + 0] += f2 * q2x;
+              posStar[p2 + 1] += f2 * q2y;
+              posStar[p2 + 2] += f2 * q2z;
+            }
+            if (w3 > 0) {
+              const f3 = w3 * deltaLambda;
+              posStar[p3 + 0] += f3 * q3x;
+              posStar[p3 + 1] += f3 * q3y;
+              posStar[p3 + 2] += f3 * q3z;
+            }
+          }
+
+          // --- B. Table Plane Contact & Coulomb Friction Constraint (contact is at z >= tableZ + paperThickness / 2) ---
+          if (this.enableTable) {
+            const zContact = this.tableZ + this.paperThickness * 0.5;
+            for (let i = 0; i < numV; i++) {
+              const w = invMass[i];
+              if (w === 0.0) continue;
+              const i3 = i * 3;
+              const zPred = posStar[i3 + 2];
+              if (zPred < zContact) {
+                const deltaZ = zContact - zPred;
+                posStar[i3 + 2] = zContact;
+
+                // Tangential motion over this substep
+                const dx = posStar[i3 + 0] - pos[i3 + 0];
+                const dy = posStar[i3 + 1] - pos[i3 + 1];
+                const dTangent = Math.hypot(dx, dy);
+
+                if (dTangent > 1e-12) {
+                  if (dTangent <= this.muStatic * deltaZ) {
+                    // Static friction arrest
+                    posStar[i3 + 0] = pos[i3 + 0];
+                    posStar[i3 + 1] = pos[i3 + 1];
+                  } else {
+                    // Kinetic friction reduction in proportion to contact normal correction
+                    const reduction = Math.min(1.0, (this.muKinetic * deltaZ) / dTangent);
+                    posStar[i3 + 0] -= dx * reduction;
+                    posStar[i3 + 1] -= dy * reduction;
+                  }
                 }
               }
             }
           }
-        }
 
-        // --- C. Phase 9: Self-Collision XPBD Constraint (Vertex-Triangle & Edge-Edge) ---
-        // Contacts were detected once for this substep from the committed state (see below).
-        if (this.enableSelfCollision && this.selfContacts.length > 0) {
-          solveContactsXPBD(this.selfContacts, posStar, pos, invMass, this.muStatic, this.muKinetic);
-        }
+          // --- C. Phase 9: Self-Collision XPBD Constraint (Vertex-Triangle & Edge-Edge) ---
+          // Contacts were detected once for this substep from the committed state (see below).
+          if (this.enableSelfCollision && this.selfContacts.length > 0) {
+            solveContactsXPBD(this.selfContacts, posStar, pos, invMass, this.muStatic, this.muKinetic);
+          }
 
-        // --- D. Distance Constraints (Axial Bars - exact inextensibility alpha = 0) ---
-        // Running bars last with dedicated distance iterations eliminates residual strain under drag
-        for (let dIter = 0; dIter < this.distanceIterations; dIter++) {
-          for (let b = 0; b < numBars; b++) {
-            const v0 = barV0[b];
-            const v1 = barV1[b];
-            const w0 = invMass[v0];
-            const w1 = invMass[v1];
-            const wSum = w0 + w1;
-            if (wSum === 0.0) continue;
+          // --- D. Distance Constraints (Axial Bars - exact inextensibility alpha = 0) ---
+          // Running bars last with dedicated distance iterations eliminates residual strain under drag
+          for (let dIter = 0; dIter < this.distanceIterations; dIter++) {
+            for (let b = 0; b < numBars; b++) {
+              const v0 = barV0[b];
+              const v1 = barV1[b];
+              const w0 = invMass[v0];
+              const w1 = invMass[v1];
+              const wSum = w0 + w1;
+              if (wSum === 0.0) continue;
 
-            const p0 = v0 * 3;
-            const p1 = v1 * 3;
-            const dx = posStar[p0 + 0] - posStar[p1 + 0];
-            const dy = posStar[p0 + 1] - posStar[p1 + 1];
-            const dz = posStar[p0 + 2] - posStar[p1 + 2];
-            const distSq = dx * dx + dy * dy + dz * dz;
-            if (distSq < 1e-14) continue;
-            const dist = Math.sqrt(distSq);
+              const p0 = v0 * 3;
+              const p1 = v1 * 3;
+              const dx = posStar[p0 + 0] - posStar[p1 + 0];
+              const dy = posStar[p0 + 1] - posStar[p1 + 1];
+              const dz = posStar[p0 + 2] - posStar[p1 + 2];
+              const distSq = dx * dx + dy * dy + dz * dz;
+              if (distSq < 1e-14) continue;
+              const dist = Math.sqrt(distSq);
 
-            const C = dist - barRestLen[b];
-            const deltaLambda = -C / wSum;
-            this.lambdaBars[b] += deltaLambda;
+              const C = dist - barRestLen[b];
+              const deltaLambda = -C / wSum;
+              this.lambdaBars[b] += deltaLambda;
 
-            const corr = deltaLambda / dist;
-            if (w0 > 0) {
-              const f0 = w0 * corr;
-              posStar[p0 + 0] += dx * f0;
-              posStar[p0 + 1] += dy * f0;
-              posStar[p0 + 2] += dz * f0;
+              const corr = deltaLambda / dist;
+              if (w0 > 0) {
+                const f0 = w0 * corr;
+                posStar[p0 + 0] += dx * f0;
+                posStar[p0 + 1] += dy * f0;
+                posStar[p0 + 2] += dz * f0;
+              }
+              if (w1 > 0) {
+                const f1 = w1 * corr;
+                posStar[p1 + 0] -= dx * f1;
+                posStar[p1 + 1] -= dy * f1;
+                posStar[p1 + 2] -= dz * f1;
+              }
             }
-            if (w1 > 0) {
-              const f1 = w1 * corr;
-              posStar[p1 + 0] -= dx * f1;
-              posStar[p1 + 1] -= dy * f1;
-              posStar[p1 + 2] -= dz * f1;
-            }
+            this.projectBarycentric(posStar, hSq);
           }
           this.projectBarycentric(posStar, hSq);
         }
-        this.projectBarycentric(posStar, hSq);
-      }
 
-      // --- Strain limiting ---
-      // Attachments are projected after the bars, so an unreachable pin/drag combination (or a
-      // violent collapse) can leave bars stretched far past their rest length. Unchecked, that
-      // stretch becomes velocity and the sheet explodes. When any bar exceeds the limit, run extra
-      // bar-only sweeps; no cost when the sheet is already near-inextensible.
-      this.limitStrain(posStar);
-
-      // Contacts get the last word before positions are committed: bars and hinges run after the
-      // contact pass inside the iterations and, when crease targets fight each other, they push
-      // layers back through one another. A few extra contact passes here cost little and keep
-      // layers on the side they were on.
-      if (this.enableSelfCollision && this.selfContacts.length > 0) {
-        for (let k = 0; k < this.finalContactPasses; k++) {
-          solveContactsXPBD(this.selfContacts, posStar, pos, invMass, this.muStatic, this.muKinetic);
-        }
-        // pull any stretch the contacts introduced back under the limit (its sweeps end on contacts)
+        // --- Strain limiting ---
+        // Attachments are projected after the bars, so an unreachable pin/drag combination (or a
+        // violent collapse) can leave bars stretched far past their rest length. Unchecked, that
+        // stretch becomes velocity and the sheet explodes. When any bar exceeds the limit, run extra
+        // bar-only sweeps; no cost when the sheet is already near-inextensible.
         this.limitStrain(posStar);
-      }
 
-
-      // 3. Update velocities and commit positions
-      const damp = this.velocityDamping;
-      const zContact = this.enableTable ? (this.tableZ + this.paperThickness * 0.5) : -Infinity;
-
-      for (let i = 0; i < numV; i++) {
-        const i3 = i * 3;
-        if (invMass[i] === 0.0) {
-          vel[i3 + 0] = 0;
-          vel[i3 + 1] = 0;
-          vel[i3 + 2] = 0;
-          pos[i3 + 0] = posStar[i3 + 0];
-          pos[i3 + 1] = posStar[i3 + 1];
-          pos[i3 + 2] = posStar[i3 + 2];
-        } else {
-          vel[i3 + 0] = (posStar[i3 + 0] - pos[i3 + 0]) * invH * damp;
-          vel[i3 + 1] = (posStar[i3 + 1] - pos[i3 + 1]) * invH * damp;
-          vel[i3 + 2] = (posStar[i3 + 2] - pos[i3 + 2]) * invH * damp;
-
-          // Contact velocity damping and non-penetration enforcement
-          if (this.enableTable && posStar[i3 + 2] <= zContact + 1e-7) {
-            if (vel[i3 + 2] < 0) {
-              vel[i3 + 2] = 0; // Inelastic normal collision
-            }
-            vel[i3 + 0] *= (1.0 - this.contactDamping);
-            vel[i3 + 1] *= (1.0 - this.contactDamping);
+        // Contacts get the last word before positions are committed: bars and hinges run after the
+        // contact pass inside the iterations and, when crease targets fight each other, they push
+        // layers back through one another. A few extra contact passes here cost little and keep
+        // layers on the side they were on.
+        if (this.enableSelfCollision && this.selfContacts.length > 0) {
+          for (let k = 0; k < this.finalContactPasses; k++) {
+            solveContactsXPBD(this.selfContacts, posStar, pos, invMass, this.muStatic, this.muKinetic);
           }
-
-          pos[i3 + 0] = posStar[i3 + 0];
-          pos[i3 + 1] = posStar[i3 + 1];
-          pos[i3 + 2] = posStar[i3 + 2];
+          // pull any stretch the contacts introduced back under the limit (its sweeps end on contacts)
+          this.limitStrain(posStar);
         }
+
+
+        // 3. Update velocities and commit positions
+        const damp = this.velocityDamping;
+        const zContact = this.enableTable ? (this.tableZ + this.paperThickness * 0.5) : -Infinity;
+
+        for (let i = 0; i < numV; i++) {
+          const i3 = i * 3;
+          if (invMass[i] === 0.0) {
+            vel[i3 + 0] = 0;
+            vel[i3 + 1] = 0;
+            vel[i3 + 2] = 0;
+            pos[i3 + 0] = posStar[i3 + 0];
+            pos[i3 + 1] = posStar[i3 + 1];
+            pos[i3 + 2] = posStar[i3 + 2];
+          } else {
+            vel[i3 + 0] = (posStar[i3 + 0] - pos[i3 + 0]) * invH * damp;
+            vel[i3 + 1] = (posStar[i3 + 1] - pos[i3 + 1]) * invH * damp;
+            vel[i3 + 2] = (posStar[i3 + 2] - pos[i3 + 2]) * invH * damp;
+
+            // Contact velocity damping and non-penetration enforcement
+            if (this.enableTable && posStar[i3 + 2] <= zContact + 1e-7) {
+              if (vel[i3 + 2] < 0) {
+                vel[i3 + 2] = 0; // Inelastic normal collision
+              }
+              vel[i3 + 0] *= (1.0 - this.contactDamping);
+              vel[i3 + 1] *= (1.0 - this.contactDamping);
+            }
+
+            pos[i3 + 0] = posStar[i3 + 0];
+            pos[i3 + 1] = posStar[i3 + 1];
+            pos[i3 + 2] = posStar[i3 + 2];
+          }
+        }
+
+        if (this.removeRigidMotion && this.isFree()) this.cancelRigidVelocity();
+
+        // Track every hinge's angle continuously. computeDihedralAngle unwraps against previousAngle;
+        // without this update a crease nudged past ±180° reads as ∓180° and the constraint folds it
+        // violently back the other way (wrong-way creases, endless motion, paper through paper).
+        const hinges = this.mesh.hinges;
+        for (let hi = 0; hi < numHinges; hi++) computeDihedralAngle(hinges[hi], pos, true);
       }
 
-      if (this.removeRigidMotion && this.isFree()) this.cancelRigidVelocity();
+    };
 
-      // Track every hinge's angle continuously. computeDihedralAngle unwraps against previousAngle;
-      // without this update a crease nudged past ±180° reads as ∓180° and the constraint folds it
-      // violently back the other way (wrong-way creases, endless motion, paper through paper).
-      const hinges = this.mesh.hinges;
-      for (let hi = 0; hi < numHinges; hi++) computeDihedralAngle(hinges[hi], pos, true);
+    runSubsteps(substepCount);
+    let moved = maxMove();
+    if (adaptive && substepCount < maxSub && moved / substepCount > perSubstep) {
+      this.mesh.positions.set(startPos);
+      this.mesh.velocities.set(startVel);
+      hinges0.forEach((hh, i) => (hh.previousAngle = startPrev[i]));
+      substepCount = Math.min(maxSub, Math.ceil(moved / perSubstep));
+      runSubsteps(substepCount);
+      moved = maxMove();
     }
+    this.lastStepMaxMove = moved;
 
     // Phase 8: Plastic hinge yield & springback update
     if (this.enablePlasticity) {

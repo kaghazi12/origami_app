@@ -41,6 +41,8 @@ export class FoldDriver {
   /** Settled on its own (energy ran out), as opposed to being stopped by the timeout. */
   settled = false;
   private readonly maxRate: number;
+  /** Clock time of the previous tick, so the fold speed is per second, not per frame. */
+  private lastTickAt: number | null = null;
 
   constructor(readonly mesh: TriMesh, private solver: FoldSolver, maxDegPerTick = MAX_DEG_PER_TICK) {
     let maxTarget = 0;
@@ -87,9 +89,16 @@ export class FoldDriver {
     if (holding) this.wake();
     if (this.frozen) return false;
 
+    // Fold speed per second: a frame slower than 60 fps advances proportionally more (up to 3x;
+    // adaptive substeps in the solver absorb the bigger step), so the fold takes as long on a slow
+    // machine or a heavy model as on a fast one.
+    const t = this.now();
+    const frames = this.lastTickAt === null ? 1 : Math.min(3, Math.max(1, (t - this.lastTickAt) / (1000 / 60)));
+    this.lastTickAt = t;
     if (!this.atTargetAlpha) {
       const d = this.target - this.alpha;
-      this.alpha = Math.abs(d) <= this.maxRate ? this.target : this.alpha + Math.sign(d) * this.maxRate;
+      const rate = this.maxRate * frames;
+      this.alpha = Math.abs(d) <= rate ? this.target : this.alpha + Math.sign(d) * rate;
       rampRestAngles(this.mesh, this.alpha);
       this.atTarget = 0;
       this.atTargetSince = this.now(); // the settle clock starts when the fold arrives

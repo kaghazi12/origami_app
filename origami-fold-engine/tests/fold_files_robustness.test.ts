@@ -131,7 +131,7 @@ describe('XPBD solver', () => {
 /** The app's physics path: prepared fold -> mesh -> solver -> FoldDriver, as the worker runs it. */
 function foldToTheEnd(raw: unknown) {
   const { fold } = prepareFold(raw);
-  const mesh = createMeshFromFold(fold, { axialStiffness: 40000, creaseStiffness: 40, facetStiffness: 200, targetEdgeLength: 0.1 });
+  const mesh = createMeshFromFold(fold, { axialStiffness: 40000, creaseStiffness: 40, facetStiffness: 200, targetEdgeLength: 0.1, refine: process.env.NO_REFINE ? false : undefined });
   const solver = new XPBDSolver(mesh, { substeps: 20, iterations: 2, bendingCompliance: 0.0005, enablePlasticity: false, enableSelfCollision: true });
   mesh.positions[Math.floor(mesh.numVertices / 2) * 3 + 2] = 0.01;
   const driver = new FoldDriver(mesh, solver);
