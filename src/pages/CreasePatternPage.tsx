@@ -34,7 +34,7 @@ import { CreaseThumbnail } from '../components/ui/Thumbnails';
 import { useToast } from '../components/ui/Toast';
 import { cn } from '../components/ui/cn';
 import { DEFAULT_PATTERN_ID, PATTERNS, patternById } from '../designs';
-import { usePageTitle } from '../router';
+import { hashParam, usePageTitle } from '../router';
 
 /** A flat crease pattern for thumbnails; folded forms are unfolded first. */
 function flatPattern(fold: FoldFormat | null): FoldFormat | null {
@@ -190,8 +190,13 @@ export const CreasePatternPage: React.FC = () => {
     }
   }, []);
 
-  const [selectedSampleId, setSelectedSampleId] = useState<string>(DEFAULT_PATTERN_ID);
-  const [initial] = useState(() => prepareFold(patternById(DEFAULT_PATTERN_ID)!.create()));
+  // the landing page's pattern strip links here with ?pattern=<id>
+  const [startId] = useState(() => {
+    const id = hashParam('pattern');
+    return id && patternById(id) ? id : DEFAULT_PATTERN_ID;
+  });
+  const [selectedSampleId, setSelectedSampleId] = useState<string>(startId);
+  const [initial] = useState(() => prepareFold(patternById(startId)!.create()));
   const [currentFold, setCurrentFold] = useState<FoldFormat>(initial.fold);
   /** What prepareFold found in the open file: repairs, and what the pattern can't do. */
   const [report, setReport] = useState<FoldReport>(initial.report);
@@ -869,7 +874,7 @@ export const CreasePatternPage: React.FC = () => {
         {/* sidebar: what's open, its pattern, and the developer panel */}
         <aside className="hidden w-72 shrink-0 flex-col overflow-y-auto border-r border-line bg-surface md:flex">
           <div className="px-5 pb-5 pt-6">
-            <h1 className="font-display text-2xl leading-tight text-ink">{title}</h1>
+            <h1 className="font-display text-3xl font-semibold leading-tight tracking-tight text-ink">{title}</h1>
             <p className="mt-1.5 text-xs text-ink-muted">
               {[info.file_author, creaseTotal ? `${creaseTotal.toLocaleString()} creases` : null].filter(Boolean).join(' · ') ||
                 'Crease pattern'}
@@ -885,7 +890,7 @@ export const CreasePatternPage: React.FC = () => {
               <button
                 type="button"
                 onClick={() => setShowPattern2D((v) => !v)}
-                className="hidden rounded-sm text-xs font-medium text-ink-muted hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 lg:block"
+                className="hidden rounded-sm text-xs font-medium text-ink-muted hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/60 lg:block"
               >
                 {showPattern2D ? 'Hide beside model' : 'Show beside model'}
               </button>
@@ -944,7 +949,7 @@ export const CreasePatternPage: React.FC = () => {
               type="button"
               aria-expanded={devOpen}
               onClick={() => setDevOpen((o) => !o)}
-              className="flex w-full items-center justify-between px-5 py-3.5 text-sm font-medium text-ink-muted hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40"
+              className="flex w-full items-center justify-between px-5 py-3.5 text-sm font-medium text-ink-muted hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus/60"
             >
               Developer
               <ChevronDown className={cn('size-4 transition-transform duration-150', devOpen && 'rotate-180')} strokeWidth={1.75} />

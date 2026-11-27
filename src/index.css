@@ -6,62 +6,84 @@
  * colours they need are mirrored in src/theme.ts — change both together.
  */
 @theme {
-  /* Paper (surfaces) */
-  --color-canvas: #f4f1ea;
-  --color-surface: #fbfaf6;
+  /* Washi (surfaces): a cool, slightly green paper. */
+  --color-canvas: #eceee7;
+  --color-surface: #f6f7f2;
   --color-surface-raised: #ffffff;
-  --color-viewer: #ece8df;
-  --color-sunken: #eae6dc;
+  --color-viewer: #e2e5dc;
+  --color-sunken: #e3e6de;
 
-  /* Ink (text, lines) */
-  --color-ink: #1c1a17;
-  --color-ink-muted: #5e5950;
-  --color-ink-faint: #8f897d;
-  --color-line: #ddd8cc;
-  --color-line-strong: #c7c1b3;
+  /* Kon (indigo ink): text, lines, and the dark bands. */
+  --color-ink: #121a30;
+  --color-ink-muted: #4a5267;
+  --color-ink-faint: #81889a;
+  --color-line: #d4d8cd;
+  --color-line-strong: #b5bbae;
+  /* Text and lines on ink-coloured bands */
+  --color-paper: #f6f7f2;
+  --color-paper-muted: #aab1c4;
+  --color-ink-line: #2a3450;
 
-  /* Accent: kami red. Use sparingly. */
-  --color-accent: #c2412d;
-  --color-accent-hover: #a93624;
-  --color-accent-soft: #f6e3de;
-  --color-on-accent: #ffffff;
+  /* Accent: yamabuki (marigold). Fills only; text on it is ink. For accent-coloured text on paper use accent-ink. */
+  --color-accent: #f5b301;
+  --color-accent-hover: #e6a600;
+  --color-accent-edge: #b98500;
+  --color-accent-soft: #fcefc5;
+  --color-accent-ink: #8a6200;
+  --color-on-accent: #121a30;
+
+  /* Keyboard focus */
+  --color-focus: #2f56c8;
 
   /* Origami semantics */
-  --color-valley: #2f5da8;
-  --color-mountain: #c2412d;
-  --color-border-crease: #1c1a17;
+  --color-valley: #2f56c8;
+  --color-mountain: #d6402a;
+  --color-border-crease: #121a30;
 
   /* Status */
-  --color-success: #3f7a4f;
-  --color-success-soft: #e3efe5;
-  --color-warning: #9a6b12;
-  --color-warning-soft: #f5ecd7;
-  --color-danger: #b3261e;
-  --color-danger-soft: #f7e1df;
+  --color-success: #2f7a52;
+  --color-success-soft: #dcefe3;
+  --color-warning: #8f6300;
+  --color-warning-soft: #f8edcf;
+  --color-danger: #b42a1f;
+  --color-danger-soft: #f6e0dc;
 
-  /* Type */
-  --font-sans: "Geist", ui-sans-serif, system-ui, sans-serif;
-  --font-display: "Newsreader", ui-serif, Georgia, serif;
-  --font-mono: "Geist Mono", ui-monospace, monospace;
+  /* Type: Bricolage Grotesque for display, Instrument Sans for the interface. */
+  --font-sans: "Instrument Sans Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-display: "Bricolage Grotesque Variable", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "IBM Plex Mono", ui-monospace, monospace;
 
   /* Shape */
   --radius-sm: 4px;
   --radius-md: 6px;
   --radius-lg: 10px;
 
-  /* Elevation */
-  --shadow-float: 0 1px 2px rgb(28 26 23 / 0.06), 0 4px 12px rgb(28 26 23 / 0.08);
-  --shadow-dialog: 0 2px 4px rgb(28 26 23 / 0.06), 0 12px 32px rgb(28 26 23 / 0.14);
+  /* Elevation. "edge" is paper thickness: a hard 2px lip under pressable things. */
+  --shadow-edge: 0 2px 0 var(--color-line-strong);
+  --shadow-edge-accent: 0 2px 0 var(--color-accent-edge);
+  --shadow-float: 0 1px 2px rgb(18 26 48 / 0.06), 0 6px 16px rgb(18 26 48 / 0.08);
+  --shadow-dialog: 0 2px 4px rgb(18 26 48 / 0.06), 0 16px 40px rgb(18 26 48 / 0.16);
 
   /* Motion */
   --ease-out: cubic-bezier(0.2, 0.8, 0.2, 1);
+  --ease-fold: cubic-bezier(0.65, 0, 0.35, 1);
 
-  /* Indeterminate progress line */
   --animate-progress: progress-slide 1.2s var(--ease-out) infinite;
+  --animate-draw: crease-draw 1.6s var(--ease-fold) both;
+  --animate-marquee: marquee 60s linear infinite;
 
   @keyframes progress-slide {
     0% { transform: translateX(-100%); }
     100% { transform: translateX(250%); }
+  }
+  /* Stroke a line in from nothing. The path needs pathLength="1". */
+  @keyframes crease-draw {
+    from { stroke-dashoffset: 1; }
+    to { stroke-dashoffset: 0; }
+  }
+  @keyframes marquee {
+    from { transform: translateX(0); }
+    to { transform: translateX(-50%); }
   }
 }
 
@@ -80,7 +102,7 @@
   }
 
   ::selection {
-    background-color: var(--color-accent-soft);
+    background-color: var(--color-accent);
     color: var(--color-ink);
   }
 
@@ -136,31 +158,32 @@
   height: 14px;
   margin-top: calc((var(--range-h, 20px) - 14px) / 2);
   border-radius: 9999px;
-  background: var(--color-surface-raised);
-  border: 1.5px solid var(--color-ink);
-  box-shadow: 0 1px 2px rgb(28 26 23 / 0.2);
-  transition: transform 120ms var(--ease-out);
+  background: var(--color-accent);
+  border: 2px solid var(--color-ink);
+  box-shadow: 0 1px 2px rgb(18 26 48 / 0.2);
+  transition: transform 150ms var(--ease-out);
 }
 
 .range-input::-moz-range-thumb {
   width: 14px;
   height: 14px;
   border-radius: 9999px;
-  background: var(--color-surface-raised);
-  border: 1.5px solid var(--color-ink);
-  box-shadow: 0 1px 2px rgb(28 26 23 / 0.2);
+  background: var(--color-accent);
+  border: 2px solid var(--color-ink);
+  box-shadow: 0 1px 2px rgb(18 26 48 / 0.2);
 }
 
+.range-input:hover:not(:disabled)::-webkit-slider-thumb,
 .range-input:active::-webkit-slider-thumb {
-  transform: scale(1.1);
+  transform: scale(1.2);
 }
 
 .range-input:focus-visible::-webkit-slider-thumb {
-  box-shadow: 0 0 0 4px rgb(194 65 45 / 0.25);
+  box-shadow: 0 0 0 4px rgb(47 86 200 / 0.3);
 }
 
 .range-input:focus-visible::-moz-range-thumb {
-  box-shadow: 0 0 0 4px rgb(194 65 45 / 0.25);
+  box-shadow: 0 0 0 4px rgb(47 86 200 / 0.3);
 }
 
 .range-input:disabled {
@@ -182,4 +205,70 @@
 * {
   scrollbar-width: thin;
   scrollbar-color: var(--color-line-strong) transparent;
+}
+
+/* Text set in display type is trimmed to cap height so it centres optically next to icons. */
+.trim-cap {
+  text-box: trim-both cap alphabetic;
+}
+/* The same for all-lowercase text (the wordmark): centre on the x-height. */
+.trim-ex {
+  text-box: trim-both ex alphabetic;
+}
+
+/*
+ * The dog-ear: a folded corner on cards. The flap grows when the card is hovered.
+ * Put .dog-ear on a relative, overflow-hidden parent with the `group` class.
+ */
+.dog-ear {
+  position: absolute;
+  top: 0;
+  right: 0;
+  width: 2.25rem;
+  height: 2.25rem;
+  transform-origin: top right;
+  transition: transform 320ms var(--ease-out);
+  pointer-events: none;
+}
+.dog-ear::before,
+.dog-ear::after {
+  content: "";
+  position: absolute;
+  inset: 0;
+}
+/* what's behind the card shows through the missing corner */
+.dog-ear::before {
+  background: var(--dog-ear-behind, var(--color-canvas));
+  clip-path: polygon(0 0, 100% 0, 100% 100%);
+}
+/* the back of the paper, folded down */
+.dog-ear::after {
+  background: var(--color-accent);
+  clip-path: polygon(0 0, 100% 100%, 0 100%);
+}
+.group:hover .dog-ear,
+.group:focus-within .dog-ear {
+  transform: scale(1.6);
+}
+
+/* A link whose underline folds out from the left on hover. */
+.crease-link {
+  position: relative;
+}
+.crease-link::after {
+  content: "";
+  position: absolute;
+  left: 0;
+  right: 0;
+  bottom: -2px;
+  height: 1.5px;
+  background: currentColor;
+  transform: scaleX(0);
+  transform-origin: left;
+  transition: transform 240ms var(--ease-out);
+}
+.crease-link:hover::after,
+.crease-link:focus-visible::after,
+.group:hover .crease-link::after {
+  transform: scaleX(1);
 }

@@ -3,24 +3,25 @@
  * These mirror the tokens in src/index.css (@theme) — change both together.
  */
 export const theme = {
-  viewer: '#ece8df',
-  canvas: '#f4f1ea',
-  surface: '#fbfaf6',
-  ink: '#1c1a17',
-  inkMuted: '#5e5950',
-  inkFaint: '#8f897d',
-  line: '#ddd8cc',
-  lineStrong: '#c7c1b3',
-  accent: '#c2412d',
-  valley: '#2f5da8',
-  mountain: '#c2412d',
-  paperEdge: '#1c1a17',
-  /** Default paper when a file doesn't give colours: white front, kami-red back. */
-  paperFront: '#fbfaf6',
-  paperBack: '#c2412d',
-  /** Hemisphere light: white sky, warm paper-coloured bounce from below. */
+  viewer: '#e2e5dc',
+  canvas: '#eceee7',
+  surface: '#f6f7f2',
+  ink: '#121a30',
+  inkMuted: '#4a5267',
+  inkFaint: '#81889a',
+  line: '#d4d8cd',
+  lineStrong: '#b5bbae',
+  paper: '#f6f7f2',
+  accent: '#f5b301',
+  valley: '#2f56c8',
+  mountain: '#d6402a',
+  paperEdge: '#121a30',
+  /** Default paper when a file doesn't give colours: white front, marigold back. */
+  paperFront: '#fbfbf8',
+  paperBack: '#f5b301',
+  /** Hemisphere light: white sky, cool paper-coloured bounce from below. */
   lightSky: '#ffffff',
-  lightGround: '#d8d2c4',
+  lightGround: '#cfd4c8',
 } as const;
 
 /** The same colours as 0–1 RGB triples, for vertex-colour buffers. */

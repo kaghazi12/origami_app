@@ -8,6 +8,7 @@ A web app where people watch origami designs fold in 3D, step by step, and inter
 - Tailwind CSS v4 (via `@tailwindcss/vite`; config lives in `src/index.css`, there is no `tailwind.config.js`)
 - three.js through `@react-three/fiber` and `@react-three/drei`
 - Icons: `lucide-react`
+- Animation: `motion` (`motion/react`). Fonts are self-hosted with `@fontsource` (Bricolage Grotesque, Instrument Sans, IBM Plex Mono)
 - Engine tests: Vitest, in `origami-fold-engine/` (a separate package that tests code in the root `src/engine/`)
 
 ## Commands
@@ -27,7 +28,7 @@ src/
   theme.ts                     the same colours for three.js and SVG (keep in sync with index.css)
   pages/                       LandingPage, LearnPage, CreasePatternPage
   components/
-    ui/                        shared kit: Button, IconButton, SegmentedControl, Scrubber, Picker, Switch, Callout, Toast, Tooltip, Thumbnails
+    ui/                        shared kit: Button, IconButton, SegmentedControl, Scrubber, Picker, Switch, Callout, Toast, Tooltip, Thumbnails, Motion (Reveal, FoldInText)
     shell/                     TopBar and Wordmark, used on every page
     prototype/                 DesignViewer3D (Learn mode and the landing hero)
     modern/                    OrigamiModernCanvas (Crease pattern mode: physics, grab, pin)
@@ -54,7 +55,9 @@ Both share one shell (top bar, 288px sidebar, viewer, transport bar) and one vis
 The rules that apply everywhere:
 
 - Use the tokens defined in `src/index.css` (`@theme`). Don't use raw Tailwind palette classes (`slate-800`, `indigo-600`, `gray-200`) or hex values in components.
+- The look is washi paper, kon-indigo ink and one marigold accent (a fill, never text on paper). Don't drift back to cream + terracotta + serif.
 - No emoji in the UI, no gradients, no glassmorphism, no glowing shadows, no `alert()`.
+- Animate with `motion`, following the skill's motion table, and respect reduced motion.
 - Write UI text for folders, not engineers: "Folding…", not "Web Worker Bar-and-Hinge"; "Show creases", not "Crease visibility toggle". Keep engine numbers (vertex count, residual force, stiffness) out of sight, behind a developer panel.
 - Pull a shared piece into `src/components/ui/` once it's used in both modes.
 - Engine and physics numbers in Crease pattern mode live in the sidebar's collapsed **Developer** panel. Keep them there.

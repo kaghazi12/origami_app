@@ -1,5 +1,6 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
 import { Check, ChevronLeft, ChevronRight, Eye, EyeOff, FileUp, Pause, Play, RotateCcw, LocateFixed } from 'lucide-react';
+import { AnimatePresence, motion } from 'motion/react';
 import { compileDesign, DesignAnimator, DesignError, type CompiledDesign } from '../engine/design';
 import { DesignViewer3D } from '../components/prototype/DesignViewer3D';
 import { TopBar } from '../components/shell/TopBar';
@@ -35,6 +36,18 @@ function load(json: unknown, source: string): Loaded {
     return { compiled: null, animator: null, fileError: msg, source };
   }
 }
+
+/** The current step's highlight. One shared layoutId, so it slides from step to step. */
+const CurrentStepMark: React.FC = () => (
+  <motion.span
+    layoutId="learn-current-step"
+    aria-hidden="true"
+    className="absolute inset-0 rounded-md bg-accent-soft"
+    transition={{ type: 'spring', stiffness: 420, damping: 36 }}
+  >
+    <span className="absolute inset-y-1.5 left-0 w-[3px] rounded-r-sm bg-accent" />
+  </motion.span>
+);
 
 type Speed = '0.5' | '1' | '2';
 /** Steps per second at 1×: one fold takes about 1.6 s. */
@@ -246,7 +259,15 @@ export const LearnPage: React.FC = () => {
           <div className="border-b border-line px-5 pb-5 pt-6">
             {design ? (
               <>
-                <h1 className="font-display text-2xl leading-tight text-ink">{design.meta.title}</h1>
+                <motion.h1
+                  key={design.meta.title}
+                  initial={{ opacity: 0, y: 8 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.3, ease: [0.2, 0.8, 0.2, 1] }}
+                  className="font-display text-3xl font-semibold leading-tight tracking-tight text-ink"
+                >
+                  {design.meta.title}
+                </motion.h1>
                 <p className="mt-1.5 text-xs text-ink-muted">
                   {[design.meta.author, difficultyLabel(design.meta.difficulty), `${design.steps.length} steps`]
                     .filter(Boolean)
@@ -288,15 +309,21 @@ export const LearnPage: React.FC = () => {
                         className={cn(
                           'relative flex w-full items-start gap-3 rounded-md py-2 pl-3 pr-2 text-left text-sm',
                           'transition-colors duration-150 ease-out',
-                          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40',
-                          active ? 'bg-accent-soft text-ink' : done ? 'text-ink-muted hover:bg-sunken' : 'text-ink hover:bg-sunken',
+                          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus/60',
+                          active ? 'text-ink' : done ? 'text-ink-muted hover:bg-sunken' : 'text-ink hover:bg-sunken',
                         )}
                       >
-                        {active && <span aria-hidden="true" className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-accent" />}
-                        <span className="flex h-5 w-5 shrink-0 items-center justify-center text-xs tabular-nums text-ink-faint">
-                          {done ? <Check className="size-3.5 text-ink-muted" strokeWidth={2} /> : i + 1}
+                        {active && <CurrentStepMark />}
+                        <span className="relative flex h-5 w-5 shrink-0 items-center justify-center text-xs tabular-nums text-ink-faint">
+                          {done ? (
+                            <motion.span initial={{ scale: 0.4, opacity: 0 }} animate={{ scale: 1, opacity: 1 }} transition={{ type: 'spring', stiffness: 500, damping: 24 }}>
+                              <Check className="size-3.5 text-ink-muted" strokeWidth={2.25} />
+                            </motion.span>
+                          ) : (
+                            i + 1
+                          )}
                         </span>
-                        <span className="leading-5">{s.caption}</span>
+                        <span className="relative leading-5">{s.caption}</span>
                       </button>
                     </li>
                   );
@@ -315,13 +342,13 @@ export const LearnPage: React.FC = () => {
                     className={cn(
                       'relative mt-1 flex w-full items-center gap-3 rounded-md py-2 pl-3 pr-2 text-left text-sm font-medium',
                       'transition-colors duration-150 ease-out',
-                      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40',
-                      atEnd ? 'bg-accent-soft text-ink' : 'text-ink-muted hover:bg-sunken hover:text-ink',
+                      'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus/60',
+                      atEnd ? 'text-ink' : 'text-ink-muted hover:bg-sunken hover:text-ink',
                     )}
                   >
-                    {atEnd && <span aria-hidden="true" className="absolute inset-y-1.5 left-0 w-0.5 rounded-full bg-accent" />}
+                    {atEnd && <CurrentStepMark />}
                     <span className="w-5 shrink-0" />
-                    Finished model
+                    <span className="relative">Finished model</span>
                   </button>
                 </li>
               </ol>
@@ -366,16 +393,34 @@ export const LearnPage: React.FC = () => {
             {/* the instruction */}
             {animator && (
               <div className="pointer-events-none absolute inset-x-0 bottom-0 flex justify-center p-4">
-                <div
+                <motion.div
+                  layout
                   aria-live="polite"
-                  className="w-full max-w-xl rounded-lg border border-line bg-surface-raised px-5 py-3.5 shadow-float"
+                  transition={{ layout: { duration: 0.25, ease: [0.2, 0.8, 0.2, 1] } }}
+                  className="relative w-full max-w-xl overflow-hidden rounded-lg border border-line bg-surface-raised px-5 py-3.5 shadow-float"
                 >
-                  <div className="text-xs font-medium tabular-nums text-ink-muted">{stepLabel}</div>
-                  <div className="mt-0.5 text-lg font-medium leading-snug text-ink">
-                    {atEnd ? design?.meta.title : current?.caption ?? 'Start with a flat sheet'}
-                  </div>
-                  {!atEnd && current?.hint && <div className="mt-1 text-sm text-ink-muted">{current.hint}</div>}
-                </div>
+                  {/* progress through the current step, along the card's top edge */}
+                  <span
+                    aria-hidden="true"
+                    className="absolute inset-x-0 top-0 h-[3px] origin-left bg-accent"
+                    style={{ transform: `scaleX(${atEnd ? 1 : loc.t})` }}
+                  />
+                  <AnimatePresence mode="wait" initial={false}>
+                    <motion.div
+                      key={atEnd ? 'end' : loc.stepIndex}
+                      initial={{ opacity: 0, y: 10 }}
+                      animate={{ opacity: 1, y: 0 }}
+                      exit={{ opacity: 0, y: -6 }}
+                      transition={{ duration: 0.2, ease: [0.2, 0.8, 0.2, 1] }}
+                    >
+                      <div className="text-xs font-medium tabular-nums text-ink-muted">{stepLabel}</div>
+                      <div className="mt-0.5 font-display text-xl font-semibold leading-snug tracking-tight text-ink">
+                        {atEnd ? design?.meta.title : current?.caption ?? 'Start with a flat sheet'}
+                      </div>
+                      {!atEnd && current?.hint && <div className="mt-1 text-sm text-ink-muted">{current.hint}</div>}
+                    </motion.div>
+                  </AnimatePresence>
+                </motion.div>
               </div>
             )}
           </div>

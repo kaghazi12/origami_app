@@ -1,4 +1,5 @@
 import React from 'react';
+import { motion } from 'motion/react';
 import { ROUTE_HASH, type Route } from '../../router';
 import { cn } from '../ui/cn';
 import { Wordmark } from './Wordmark';
@@ -15,12 +16,16 @@ interface TopBarProps {
   className?: string;
 }
 
-/** The one top bar used on every page: wordmark, the two modes, then page actions. */
+/**
+ * The one top bar used on every page: wordmark, the two modes, then page actions.
+ * The marigold tab under the current mode slides between modes (shared layoutId), so the
+ * change of page reads as one movement.
+ */
 export const TopBar: React.FC<TopBarProps> = ({ route, children, className }) => (
   <header className={cn('flex h-12 shrink-0 items-center gap-3 border-b border-line bg-surface px-3 sm:gap-6 sm:px-4', className)}>
     <a
       href={ROUTE_HASH.home}
-      className="rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-2"
+      className="flex h-full items-center rounded-sm focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/60 focus-visible:ring-offset-2"
       aria-label="Origami home"
     >
       <Wordmark compact />
@@ -36,18 +41,19 @@ export const TopBar: React.FC<TopBarProps> = ({ route, children, className }) =>
             aria-current={current ? 'page' : undefined}
             className={cn(
               'relative flex items-center whitespace-nowrap px-2 text-sm font-medium transition-colors duration-150 ease-out sm:px-2.5',
-              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-accent/40',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-inset focus-visible:ring-focus/60',
               current ? 'text-ink' : 'text-ink-muted hover:text-ink',
             )}
           >
             {n.label}
-            <span
-              aria-hidden="true"
-              className={cn(
-                'absolute inset-x-2 -bottom-px h-0.5 rounded-full transition-colors duration-150 sm:inset-x-2.5',
-                current ? 'bg-ink' : 'bg-transparent',
-              )}
-            />
+            {current && (
+              <motion.span
+                layoutId="topbar-current"
+                aria-hidden="true"
+                className="absolute inset-x-2 -bottom-px h-[3px] rounded-t-sm bg-accent sm:inset-x-2.5"
+                transition={{ type: 'spring', stiffness: 420, damping: 34 }}
+              />
+            )}
           </a>
         );
       })}

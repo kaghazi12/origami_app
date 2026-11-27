@@ -1,5 +1,6 @@
 import React, { useEffect, useId, useRef, useState } from 'react';
 import { Check, ChevronDown } from 'lucide-react';
+import { AnimatePresence, motion } from 'motion/react';
 import { cn } from './cn';
 
 export interface PickerItem {
@@ -91,7 +92,7 @@ export const Picker: React.FC<PickerProps> = ({ items, value, onChange, fallback
         className={cn(
           'flex h-8 w-full items-center gap-2 rounded-md border border-line-strong bg-surface-raised pl-2 pr-2 text-left text-sm',
           'transition-[background-color,border-color] duration-150 ease-out hover:bg-sunken',
-          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-1',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/60 focus-visible:ring-offset-1',
         )}
       >
         {selected?.thumbnail && <span className="size-5 shrink-0">{selected.thumbnail}</span>}
@@ -102,8 +103,17 @@ export const Picker: React.FC<PickerProps> = ({ items, value, onChange, fallback
         />
       </button>
 
+      <AnimatePresence>
       {open && (
-        <div className="absolute left-0 top-full z-50 mt-1 w-full min-w-72 rounded-lg border border-line bg-surface-raised p-1 shadow-dialog">
+        <motion.div
+          key="list"
+          initial={{ opacity: 0, y: -6, scaleY: 0.96 }}
+          animate={{ opacity: 1, y: 0, scaleY: 1 }}
+          exit={{ opacity: 0, y: -4, scaleY: 0.98, transition: { duration: 0.12 } }}
+          transition={{ duration: 0.2, ease: [0.2, 0.8, 0.2, 1] }}
+          style={{ transformOrigin: 'top' }}
+          className="absolute left-0 top-full z-50 mt-1 w-full min-w-72 rounded-lg border border-line bg-surface-raised p-1 shadow-dialog"
+        >
           <ul
             ref={listRef}
             id={listId}
@@ -132,7 +142,7 @@ export const Picker: React.FC<PickerProps> = ({ items, value, onChange, fallback
                     onPointerEnter={() => setActive(i)}
                     onClick={() => choose(i)}
                     className={cn(
-                      'flex cursor-pointer items-center gap-3 rounded-md px-2 py-1.5',
+                      'relative flex cursor-pointer items-center gap-3 rounded-md px-2 py-1.5 transition-colors duration-100',
                       i === active && 'bg-sunken',
                     )}
                   >
@@ -141,7 +151,7 @@ export const Picker: React.FC<PickerProps> = ({ items, value, onChange, fallback
                       <span className="block truncate text-sm font-medium text-ink">{item.title}</span>
                       {item.meta && <span className="block truncate text-xs text-ink-muted">{item.meta}</span>}
                     </span>
-                    {isSelected && <Check className="size-4 shrink-0 text-ink" strokeWidth={1.75} />}
+                    {isSelected && <Check className="size-4 shrink-0 text-accent-ink" strokeWidth={2.25} />}
                   </li>
                 </React.Fragment>
               );
@@ -152,8 +162,9 @@ export const Picker: React.FC<PickerProps> = ({ items, value, onChange, fallback
               {footer}
             </div>
           )}
-        </div>
+        </motion.div>
       )}
+      </AnimatePresence>
     </div>
   );
 };

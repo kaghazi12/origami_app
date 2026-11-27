@@ -2,20 +2,27 @@ import React from 'react';
 import { cn } from './cn';
 import { Tooltip } from './Tooltip';
 
-type Variant = 'primary' | 'secondary' | 'ghost';
+/** `inverse`: a secondary button for ink-coloured bands (the landing hero). */
+type Variant = 'primary' | 'secondary' | 'ghost' | 'inverse';
 type Size = 'sm' | 'md' | 'lg';
 
 const base =
   'inline-flex items-center justify-center gap-2 rounded-md font-medium whitespace-nowrap select-none ' +
-  'transition-[background-color,border-color,color,box-shadow] duration-150 ease-out ' +
-  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-1 focus-visible:ring-offset-canvas ' +
+  'transition-[background-color,border-color,color,box-shadow,transform] duration-150 ease-out ' +
+  'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/60 focus-visible:ring-offset-1 focus-visible:ring-offset-canvas ' +
   'disabled:opacity-50 disabled:cursor-not-allowed';
 
+/*
+ * Primary and secondary buttons have a 2px "paper edge" under them (shadow-edge). Pressing
+ * pushes the button down onto it, like pressing a crease flat.
+ */
+const press = 'enabled:active:translate-y-0.5 enabled:active:shadow-none [a&]:active:translate-y-0.5 [a&]:active:shadow-none';
+
 const variants: Record<Variant, string> = {
-  primary: 'bg-accent text-on-accent hover:bg-accent-hover disabled:hover:bg-accent',
-  secondary:
-    'bg-surface-raised text-ink border border-line-strong hover:bg-sunken hover:border-line-strong disabled:hover:bg-surface-raised',
+  primary: `bg-accent text-on-accent font-semibold shadow-edge-accent hover:bg-accent-hover disabled:hover:bg-accent ${press}`,
+  secondary: `bg-surface-raised text-ink border border-line-strong shadow-edge hover:bg-surface hover:border-ink-faint disabled:hover:bg-surface-raised ${press}`,
   ghost: 'text-ink-muted hover:text-ink hover:bg-sunken disabled:hover:bg-transparent',
+  inverse: `text-paper border border-paper-muted/50 shadow-[0_2px_0_var(--color-ink-line)] hover:border-paper hover:bg-ink-line ${press}`,
 };
 
 const sizes: Record<Size, string> = {
@@ -100,6 +107,7 @@ export const IconButton = React.forwardRef<HTMLButtonElement, IconButtonProps>(
           variants[variant],
           size === 'sm' ? 'size-7' : 'size-8',
           active && variant === 'ghost' && 'bg-sunken text-ink',
+          variant === 'ghost' && 'active:bg-line',
           className,
         )}
         {...rest}

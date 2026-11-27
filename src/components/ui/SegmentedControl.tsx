@@ -1,4 +1,5 @@
 import React from 'react';
+import { motion } from 'motion/react';
 import { cn } from './cn';
 
 export interface Segment<T extends string> {
@@ -27,6 +28,8 @@ export function SegmentedControl<T extends string>({
   className,
 }: SegmentedControlProps<T>) {
   const refs = React.useRef<Array<HTMLButtonElement | null>>([]);
+  /** The selected segment's raised thumb slides from one segment to the next. */
+  const thumbId = React.useId();
 
   const onKeyDown = (e: React.KeyboardEvent, i: number) => {
     if (e.key !== 'ArrowRight' && e.key !== 'ArrowLeft') return;
@@ -60,14 +63,22 @@ export function SegmentedControl<T extends string>({
             onClick={() => onChange(s.value)}
             onKeyDown={(e) => onKeyDown(e, i)}
             className={cn(
-              'inline-flex flex-1 items-center justify-center gap-1.5 rounded-sm font-medium whitespace-nowrap',
-              'transition-[background-color,color,box-shadow] duration-150 ease-out',
-              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40',
+              'relative inline-flex flex-1 items-center justify-center gap-1.5 rounded-sm font-medium whitespace-nowrap',
+              'transition-colors duration-150 ease-out',
+              'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/60',
               size === 'sm' ? 'px-2 text-xs' : 'px-3 text-sm',
-              selected ? 'bg-surface-raised text-ink shadow-sm' : 'text-ink-muted hover:text-ink',
+              selected ? 'text-ink' : 'text-ink-muted hover:text-ink',
             )}
           >
-            {s.label}
+            {selected && (
+              <motion.span
+                layoutId={thumbId}
+                aria-hidden="true"
+                className="absolute inset-0 rounded-sm bg-surface-raised shadow-sm"
+                transition={{ type: 'spring', stiffness: 500, damping: 38 }}
+              />
+            )}
+            <span className="relative inline-flex items-center gap-1.5">{s.label}</span>
           </button>
         );
       })}

@@ -21,9 +21,9 @@ export const Tooltip: React.FC<TooltipProps> = ({ content, shortcut, side = 'bot
       className={cn(
         'pointer-events-none absolute left-1/2 z-50 -translate-x-1/2 whitespace-nowrap',
         'inline-flex items-center gap-1.5 rounded-md bg-ink px-2 py-1 text-xs font-medium text-canvas',
-        'opacity-0 transition-opacity duration-150 ease-out',
-        'group-hover/tip:opacity-100 group-hover/tip:delay-300 group-focus-within/tip:opacity-100',
-        side === 'bottom' ? 'top-full mt-1.5' : 'bottom-full mb-1.5',
+        'opacity-0 transition-[opacity,translate] duration-150 ease-out',
+        'group-hover/tip:opacity-100 group-hover/tip:translate-y-0 group-hover/tip:delay-300 group-focus-within/tip:opacity-100 group-focus-within/tip:translate-y-0',
+        side === 'bottom' ? 'top-full mt-1.5 -translate-y-1' : 'bottom-full mb-1.5 translate-y-1',
       )}
     >
       {content}

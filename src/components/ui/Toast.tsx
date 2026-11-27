@@ -1,5 +1,6 @@
 import React, { createContext, useCallback, useContext, useMemo, useRef, useState } from 'react';
 import { CircleCheck, CircleX, X } from 'lucide-react';
+import { AnimatePresence, motion } from 'motion/react';
 import { cn } from './cn';
 
 type ToastTone = 'info' | 'error';
@@ -42,9 +43,15 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
         aria-live="polite"
         className="pointer-events-none fixed inset-x-0 bottom-24 z-[60] flex flex-col items-center gap-2 px-4"
       >
+        <AnimatePresence initial={false}>
         {items.map((t) => (
-          <div
+          <motion.div
             key={t.id}
+            layout
+            initial={{ opacity: 0, y: 16, scale: 0.97 }}
+            animate={{ opacity: 1, y: 0, scale: 1 }}
+            exit={{ opacity: 0, y: 8, scale: 0.98, transition: { duration: 0.15 } }}
+            transition={{ type: 'spring', stiffness: 420, damping: 32 }}
             role={t.tone === 'error' ? 'alert' : 'status'}
             className="pointer-events-auto flex w-full max-w-md items-start gap-3 rounded-lg border border-line bg-surface-raised px-4 py-3 shadow-dialog"
           >
@@ -61,12 +68,13 @@ export const ToastProvider: React.FC<{ children: React.ReactNode }> = ({ childre
               type="button"
               aria-label="Dismiss"
               onClick={() => dismiss(t.id)}
-              className="-mr-1 rounded-sm p-0.5 text-ink-faint transition-colors duration-150 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40"
+              className="-mr-1 rounded-sm p-0.5 text-ink-faint transition-colors duration-150 hover:text-ink focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/60"
             >
               <X className="size-4" strokeWidth={1.75} />
             </button>
-          </div>
+          </motion.div>
         ))}
+        </AnimatePresence>
       </div>
     </ToastContext.Provider>
   );

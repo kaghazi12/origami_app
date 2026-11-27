@@ -10,7 +10,7 @@ export const ROUTE_HASH: Record<Route, string> = {
 };
 
 export function routeFromHash(hash: string): Route {
-  const h = hash.replace(/^#\/?/, '').replace(/\/$/, '');
+  const h = hash.replace(/^#\/?/, '').split('?')[0].replace(/\/$/, '');
   // older links (#learn, #crease-pattern, #modern) keep working
   if (h === 'learn') return 'learn';
   if (h === 'crease-pattern' || h === 'modern') return 'creasePattern';
@@ -30,6 +30,12 @@ export function useRoute(): Route {
     return () => window.removeEventListener('hashchange', onHash);
   }, []);
   return route;
+}
+
+/** A query value from the hash: `#/crease-pattern?pattern=bird-base` → 'bird-base'. */
+export function hashParam(name: string): string | null {
+  if (typeof window === 'undefined') return null;
+  return new URLSearchParams(window.location.hash.split('?')[1] ?? '').get(name);
 }
 
 /** Sets the page title: "Crane · Origami", or just "Origami". */

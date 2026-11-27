@@ -26,14 +26,14 @@ export const Switch: React.FC<SwitchProps> = ({ checked, onChange, label, descri
         onClick={() => onChange(!checked)}
         className={cn(
           'relative inline-flex h-4.5 w-8 shrink-0 items-center rounded-full transition-colors duration-150 ease-out',
-          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-accent/40 focus-visible:ring-offset-1',
+          'focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-focus/60 focus-visible:ring-offset-1',
           checked ? 'bg-ink' : 'bg-line-strong',
         )}
       >
         <span
           className={cn(
-            'inline-block size-3.5 rounded-full bg-surface-raised shadow-sm transition-transform duration-150 ease-out',
-            checked ? 'translate-x-4' : 'translate-x-0.5',
+            'inline-block size-3.5 rounded-full shadow-sm transition-[translate,background-color] duration-200 ease-out',
+            checked ? 'translate-x-4 bg-accent' : 'translate-x-0.5 bg-surface-raised',
           )}
         />
       </button>
