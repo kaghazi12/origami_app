@@ -42,12 +42,32 @@ function clipLine(p: Vec, d: Vec, W: number, H: number): [Vec, Vec] | null {
   return [[p[0] + d[0] * t0, p[1] + d[1] * t0], [p[0] + d[0] * t1, p[1] + d[1] * t1]];
 }
 
+/** Clip the ray (t >= 0) or line through p with direction d to a convex polygon (CCW). */
+function clipToConvex(p: Vec, d: Vec, poly: Vec[], ray = false): [Vec, Vec] | null {
+  let t0 = ray ? 0 : -Infinity, t1 = Infinity;
+  for (let i = 0; i < poly.length; i++) {
+    const a = poly[i], b = poly[(i + 1) % poly.length];
+    const n: Vec = [b[1] - a[1], a[0] - b[0]]; // outward normal for a CCW polygon
+    const num = n[0] * (a[0] - p[0]) + n[1] * (a[1] - p[1]);
+    const den = n[0] * d[0] + n[1] * d[1];
+    if (Math.abs(den) < 1e-15) { if (num < -1e-12) return null; continue; }
+    const t = num / den;
+    if (den > 0) t1 = Math.min(t1, t); else t0 = Math.max(t0, t);
+  }
+  if (t1 - t0 < 1e-9) return null;
+  return [[p[0] + d[0] * t0, p[1] + d[1] * t0], [p[0] + d[0] * t1, p[1] + d[1] * t1]];
+}
+
 /** Planar graph from line segments plus the rectangle's boundary: all crossings become vertices. */
 function buildFromLines(lines: Line[], W: number, H: number) {
+  return buildInPolygon(lines, [[0, 0], [W, 0], [W, H], [0, H]]);
+}
+
+/** Planar graph from line segments plus a polygon outline (the paper): all crossings become vertices. */
+function buildInPolygon(lines: Line[], poly: Vec[]) {
   const segs: Line[] = [
     ...lines,
-    { id: -1, a: [0, 0], b: [W, 0] }, { id: -1, a: [W, 0], b: [W, H] },
-    { id: -1, a: [W, H], b: [0, H] }, { id: -1, a: [0, H], b: [0, 0] },
+    ...poly.map((a, i): Line => ({ id: -1, a, b: poly[(i + 1) % poly.length] })),
   ];
   const verts: Vec[] = [];
   const index = new Map<string, number>();
@@ -247,13 +267,13 @@ function yoshimura(): FoldFormat {
 
 // ---------------------------------------------------------------- 04 square twist tessellation
 
-function squareTwist(): FoldFormat {
+function squareTwist(alphaDeg = 22.5, side = 1.2): FoldFormat {
   // Four square twists in a 2x2 grid. Each twist is a small square rotated by ALPHA relative to
   // its four pleats; the pleats run along the axes. Every corner of a square sends out one
   // horizontal and one vertical crease, so it has four creases with sectors (90-a, 90, 90+a, 90):
   // Kawasaki holds for any twist angle. Neighbouring twists turn opposite ways so their pleats
   // line up. (Pleats crossing square-on, without a twist, can't fold flat.)
-  const N = 2, P = 4, W = P * N, H = P * N, s = 1.2, ALPHA = 22.5 / DEG;
+  const N = 2, P = 4, W = P * N, H = P * N, s = side, ALPHA = alphaDeg / DEG;
   type T = { i: number; j: number; c: Vec; corners: Vec[] };
   const twists: T[] = [];
   for (let i = 0; i < N; i++) for (let j = 0; j < N; j++) {
@@ -549,6 +569,266 @@ function hypar(): FoldFormat {
   throw new Error('06: no triangulation of the hypar folds rigidly');
 }
 
+// ---------------------------------------------------------------- shared: flat-fold assignment search
+
+/**
+ * Find a mountain/valley assignment that folds flat. At every inner corner: |M − V| = 2
+ * (Maekawa) and the creases around any sector strictly smaller than both neighbours differ
+ * (big-little-big). Backtracking over corners enumerates every such assignment; the exact folder
+ * must find a layer order for the one that is kept.
+ */
+function searchFlat(meta: Record<string, unknown>, verts: Vec[], edges: BuiltEdge[], limit = 20000): FoldFormat {
+  const isBoundaryV = new Set<number>();
+  edges.forEach((e) => { if (e.line === -1) { isBoundaryV.add(e.u); isBoundaryV.add(e.v); } });
+  const atV = new Map<number, number[]>();
+  edges.forEach((e, i) => {
+    if (e.line === -1) return;
+    for (const x of [e.u, e.v]) if (!isBoundaryV.has(x)) atV.set(x, [...(atV.get(x) ?? []), i]);
+  });
+  const corners = [...atV.entries()].map(([v, list]) => {
+    const sorted = list.map((i) => {
+      const e = edges[i], o = e.u === v ? e.v : e.u;
+      return { i, ang: Math.atan2(verts[o][1] - verts[v][1], verts[o][0] - verts[v][0]) };
+    }).sort((x, y) => x.ang - y.ang);
+    const n = sorted.length;
+    const sec = sorted.map((c, k) => { let d = sorted[(k + 1) % n].ang - c.ang; if (d <= 0) d += 2 * Math.PI; return d; });
+    const options: Map<number, EdgeAssignment>[] = [];
+    for (let mask = 0; mask < 1 << n; mask++) {
+      let m = 0;
+      for (let k = 0; k < n; k++) if ((mask >> k) & 1) m++;
+      if (Math.abs(m - (n - m)) !== 2) continue;
+      let ok = true;
+      for (let k = 0; k < n && ok; k++) {
+        if (sec[k] < sec[(k + n - 1) % n] - 1e-9 && sec[k] < sec[(k + 1) % n] - 1e-9) {
+          if (((mask >> k) & 1) === ((mask >> ((k + 1) % n)) & 1)) ok = false;
+        }
+      }
+      if (!ok) continue;
+      const o = new Map<number, EdgeAssignment>();
+      sorted.forEach((c, k) => o.set(c.i, (mask >> k) & 1 ? 'M' : 'V'));
+      options.push(o);
+    }
+    return options;
+  });
+  const idxOf = new Map(edges.map((e, i) => [e, i]));
+  const val = new Map<number, EdgeAssignment>();
+  const reasons = new Map<string, number>();
+  let tested = 0;
+  const search = (k: number): FoldFormat | null => {
+    if (tested >= limit) return null;
+    if (k === corners.length) {
+      tested++;
+      // creases touching no inner corner (edge to edge) are free: try valley
+      const fold = toFold(meta, verts, edges, (e) => val.get(idxOf.get(e)!) ?? 'V', (_e, a) => (a === 'V' ? 180 : -180));
+      const ex = exactFold(fold);
+      if (ex.ok) return fold;
+      reasons.set(ex.reason ?? '?', (reasons.get(ex.reason ?? '?') ?? 0) + 1);
+      return null;
+    }
+    for (const o of corners[k]) {
+      const added: number[] = [];
+      let ok = true;
+      for (const [i, a] of o) {
+        if (val.has(i)) { if (val.get(i) !== a) { ok = false; break; } } else { val.set(i, a); added.push(i); }
+      }
+      if (ok) { const r = search(k + 1); if (r) return r; }
+      for (const i of added) val.delete(i);
+    }
+    return null;
+  };
+  const found = search(0);
+  if (found) return found;
+  const dead = [...atV.keys()].filter((_, k) => corners[k].length === 0).map((v) => {
+    const list = atV.get(v)!.map((i) => { const e = edges[i], o = e.u === v ? e.v : e.u; return Math.atan2(verts[o][1] - verts[v][1], verts[o][0] - verts[v][0]) * DEG; }).sort((x, y) => x - y);
+    return `(${verts[v].map((x) => x.toFixed(3)).join(',')}) creases at ${list.map((x) => x.toFixed(1)).join('/')}`;
+  });
+  throw new Error(`no flat-foldable assignment (${tested} tried: ${[...reasons].map(([r, n]) => `${n}x ${r}`).join('; ')})${dead.length ? `; corners with no option: ${dead.join('; ')}` : ''}`);
+}
+
+/** Solve a partial rigid fold: hold one crease at `targetDeg` (ramped up from 2°) and close up every corner. */
+function rigidPartial(base: FoldFormat, held: number, targetDeg: number): number[] {
+  const n = base.edges_vertices.length;
+  const free = [...Array(n).keys()].filter((e) => base.edges_assignment[e] !== 'B' && e !== held);
+  const sign = base.edges_assignment[held] === 'M' ? -1 : 1;
+  let angles = base.edges_assignment.map((a) => (a === 'M' ? -0.02 : a === 'V' ? 0.02 : 0));
+  const steps = Math.ceil(Math.abs(targetDeg) / 2);
+  for (let k = 1; k <= steps; k++) {
+    const deg = (Math.abs(targetDeg) * k) / steps;
+    const res = closeUp(base, free, held, (sign * deg) / DEG, angles);
+    if (res.residual > 1e-10) throw new Error(`the corners don't close up at ${deg.toFixed(1)} degrees`);
+    angles = res.angles;
+  }
+  return angles;
+}
+
+const meta0 = (title: string, description: string, frameTitle = 'Crease pattern') => ({
+  file_creator: 'origami_app scripts/generate-test-folds.ts',
+  file_title: title,
+  file_description: description,
+  file_classes: ['singleModel'],
+  frame_title: frameTitle,
+  frame_classes: ['creasePattern'],
+  frame_attributes: ['2D'],
+});
+
+// ---------------------------------------------------------------- 07 generic degree-4 vertex, partly folded
+
+function genericVertex(): FoldFormat {
+  // One corner off the middle of a square sheet, four creases with sectors 37°, 101°, 143°, 79°
+  // (37 + 143 = 101 + 79 = 180: Kawasaki). A degree-4 corner folds rigidly with one degree of
+  // freedom: the creases' angles are solved with one held at 63.7°.
+  const c: Vec = [0.43, 0.56];
+  const start = 17, sectors = [37, 101, 143, 79];
+  const lines: Line[] = [];
+  let phi = start;
+  sectors.forEach((sct, k) => {
+    const d: Vec = [Math.cos(phi / DEG), Math.sin(phi / DEG)];
+    const seg = clipToConvex(c, d, [[0, 0], [1, 0], [1, 1], [0, 1]], true)!;
+    lines.push({ id: k, a: seg[0], b: seg[1] });
+    phi += sct;
+  });
+  const { verts, edges } = buildFromLines(lines, 1, 1);
+  // M/V for this corner: the smallest sector (37°) has opposite creases around it, 3 + 1
+  const asg0: EdgeAssignment[] = ['M', 'V', 'V', 'V'];
+  const meta = meta0(
+    'Generic Degree-4 Vertex',
+    'One corner with four creases at irregular angles (sectors 37, 101, 143 and 79 degrees; 37 + 143 = 101 + 79 = 180). Partly folded rigidly: one crease held at 63.7 degrees and the other three solved so the corner closes up exactly.',
+    'Crease pattern, partly folded target',
+  );
+  let base = toFold(meta, verts, edges, (e) => asg0[e.line], (_e, a) => (a === 'V' ? 180 : -180));
+  const held = base.edges_assignment.findIndex((a, e) => a !== 'B' && edges[e].line === 0);
+  const angles = rigidPartial(base, held, 63.7);
+  base = { ...base, edges_foldAngle: angles.map((x, e) => (base.edges_assignment[e] === 'B' ? 0 : round(x * DEG))) };
+  return base;
+}
+
+// ---------------------------------------------------------------- 08 slanted pleats at an odd angle
+
+function slantedPleats(): FoldFormat {
+  // Seven parallel creases slanted 17° off vertical on a 1 x 0.7 sheet, alternating mountain and
+  // valley, each folded to 72.5°: a pleat (accordion) at an angle that isn't 45 or 90.
+  const W = 1, H = 0.7, tilt = 17 / DEG;
+  const d: Vec = [Math.sin(tilt), Math.cos(tilt)];
+  const lines: Line[] = [];
+  for (let k = 0; k < 7; k++) {
+    const x = 0.14 + k * 0.12;
+    const seg = clipLine([x, H / 2], d, W, H)!;
+    lines.push({ id: k, a: seg[0], b: seg[1] });
+  }
+  const { verts, edges } = buildFromLines(lines, W, H);
+  return toFold(
+    meta0('Slanted Pleats', 'Seven parallel creases slanted 17 degrees off vertical on a 1 x 0.7 sheet, alternating mountain and valley, each folded to 72.5 degrees.', 'Crease pattern, partly folded target'),
+    verts, edges, (e) => (e.line % 2 ? 'M' : 'V'), (_e, a) => (a === 'V' ? 72.5 : -72.5),
+  );
+}
+
+// ---------------------------------------------------------------- 09 Miura-ori with a 57.3° parallelogram
+
+function miuraOdd(): FoldFormat {
+  // 5x4 Miura-ori with a 57.3° parallelogram angle, partly folded: one crease family at 37.1°, the
+  // other at the coupled angle (tan(a/2) = cos(gamma) tan(b/2)), so every crease reaches its angle.
+  const gammaDeg = 57.3, gamma = gammaDeg / DEG, thetaV = 37.1 / DEG;
+  const base = createMiuraOriPattern(5, 4, 5, 4, gammaDeg);
+  const { thetaH } = computeMiuraCoupledAngles(gamma, thetaV);
+  const V = base.vertices_coords as number[][];
+  for (const swap of [false, true]) {
+    const f: FoldFormat = {
+      ...base,
+      vertices_coords: V.map((p) => [round(p[0]), round(p[1])]) as [number, number][],
+      edges_foldAngle: base.edges_vertices.map(([a, b], e) => {
+        const s = base.edges_assignment[e];
+        if (s !== 'M' && s !== 'V') return 0;
+        const horizontal = Math.abs(V[a][1] - V[b][1]) < 1e-9;
+        const mag = (horizontal !== swap ? Math.abs(thetaH) : thetaV) * DEG;
+        return round(s === 'V' ? mag : -mag);
+      }),
+    };
+    f.faces_vertices = extractPlanarFaces(f);
+    if (exactFold(f).ok) {
+      const a = (horizontal: boolean) => ((horizontal !== swap ? Math.abs(thetaH) : thetaV) * DEG).toFixed(2);
+      return {
+        ...f,
+        ...meta0(
+          'Miura-ori, 57.3 Degree Parallelogram',
+          `5x4 Miura-ori with a 57.3-degree parallelogram angle, partly folded: straight creases at ${a(true)} degrees and zigzag creases at ${a(false)} degrees (tan(a/2) = cos(57.3) tan(b/2)), so every crease reaches its angle with rigid faces.`,
+          'Crease pattern, partly folded target',
+        ),
+      } as FoldFormat;
+    }
+  }
+  throw new Error('no Miura angle assignment closes up');
+}
+
+// ---------------------------------------------------------------- 10 square twists at 31.7°
+
+function squareTwistOdd(): FoldFormat {
+  const f = squareTwist(31.7, 1.0);
+  return {
+    ...f,
+    file_title: '2x2 Square Twist Tessellation, 31.7 Degrees',
+    file_description: 'Four square twists in a 2x2 grid on an 8x8 sheet, each square turned 31.7 degrees against its pleats (squares 1.0 wide); neighbouring twists turn opposite ways. Every inner corner has sectors 58.3, 90, 121.7 and 90 degrees and the sheet folds flat.',
+  };
+}
+
+// ---------------------------------------------------------------- 11 rabbit ear on a scalene triangle
+
+function rabbitEar(): FoldFormat {
+  // A triangle of paper with angles 47°, 61°, 72°. The three angle bisectors meet at the incentre;
+  // a fourth crease runs from the incentre at right angles to the side P0–P1. Going round the
+  // incentre the sectors are 90 − A/2, 90 − B/2, 90 + A/2, 90 + B/2, so Kawasaki holds for any
+  // triangle.
+  const A = 47 / DEG, B = 61 / DEG;
+  const P0: Vec = [0, 0], P1: Vec = [1, 0];
+  // third corner from the angles at P0 and P1
+  const t = Math.sin(B) / Math.sin(Math.PI - A - B); // |P0 P2| by the sine rule (|P0 P1| = 1)
+  const P2: Vec = [t * Math.cos(A), t * Math.sin(A)];
+  const la = Math.hypot(P2[0] - P1[0], P2[1] - P1[1]), lb = t, lc = 1; // opposite P0, P1, P2
+  const I: Vec = [(la * P0[0] + lb * P1[0] + lc * P2[0]) / (la + lb + lc), (la * P0[1] + lb * P1[1] + lc * P2[1]) / (la + lb + lc)];
+  const foot: Vec = [I[0], 0]; // perpendicular to the side P0 P1
+  const lines: Line[] = [
+    { id: 0, a: I, b: P0 }, { id: 1, a: I, b: P1 }, { id: 2, a: I, b: P2 }, { id: 3, a: I, b: foot },
+  ];
+  const { verts, edges } = buildInPolygon(lines, [P0, P1, P2]);
+  return searchFlat(
+    meta0('Rabbit Ear on a Scalene Triangle', 'A triangle of paper with angles 47, 61 and 72 degrees: the three angle bisectors meet at the incentre, and a fourth crease runs from there at right angles to one side. Folds flat into the classic rabbit ear.'),
+    verts, edges,
+  );
+}
+
+// ---------------------------------------------------------------- 12 triangle twist on a hexagon
+
+function triangleTwist(): FoldFormat {
+  // An equilateral triangle turned 41.3° against its three pleats, on a regular hexagon of paper.
+  // Each triangle corner sends out two creases 120° apart, so its sectors are 60, 90 − a, 120,
+  // 90 + a: Kawasaki holds for any twist angle. It must be over 30°: below that the 60° sector
+  // is the smallest at every corner, so (big-little-big) the two triangle sides at each corner
+  // would have to differ, which three sides can't do.
+  const R = 1, r = 0.22, alpha = 41.3 / DEG;
+  const hex: Vec[] = [...Array(6).keys()].map((k) => [R * Math.cos((k * 60) / DEG), R * Math.sin((k * 60) / DEG)]);
+  const tri: Vec[] = [90, 210, 330].map((a) => [r * Math.cos(a / DEG + alpha), r * Math.sin(a / DEG + alpha)]);
+  const lines: Line[] = [];
+  let id = 0;
+  for (let k = 0; k < 3; k++) lines.push({ id: id++, a: tri[k], b: tri[(k + 1) % 3] });
+  // pleats point along the side normals of the untwisted triangle; the two corners furthest
+  // along each one send a crease that way
+  for (const deg of [30, 150, 270]) {
+    const d: Vec = [Math.cos(deg / DEG), Math.sin(deg / DEG)];
+    const two = [...tri].sort((p, q) => (q[0] * d[0] + q[1] * d[1]) - (p[0] * d[0] + p[1] * d[1])).slice(0, 2);
+    for (const p of two) {
+      const seg = clipToConvex(p, d, hex, true)!;
+      lines.push({ id: id++, a: seg[0], b: seg[1] });
+    }
+  }
+  const { verts, edges } = buildInPolygon(lines, hex);
+  // move the hexagon so its corner box starts at the origin
+  const minX = Math.min(...verts.map((p) => p[0])), minY = Math.min(...verts.map((p) => p[1]));
+  const shifted = verts.map((p): Vec => [p[0] - minX, p[1] - minY]);
+  return searchFlat(
+    meta0('Triangle Twist on a Hexagon', 'An equilateral triangle turned 41.3 degrees against its three pleats, on a regular hexagon of paper. Each corner of the triangle has sectors of 60, 48.7, 120 and 131.3 degrees, and the sheet folds flat.'),
+    shifted, edges,
+  );
+}
+
 // ---------------------------------------------------------------- main
 
 const builders: [string, () => FoldFormat][] = [
@@ -558,6 +838,12 @@ const builders: [string, () => FoldFormat][] = [
   ['04_square_twist_2x2.fold', squareTwist],
   ['05_bird_base_multiframe.fold', birdBase],
   ['06_hypar_concentric_5ring.fold', hypar],
+  ['07_generic_degree4_vertex.fold', genericVertex],
+  ['08_slanted_pleats_72deg.fold', slantedPleats],
+  ['09_miura_ori_57deg.fold', miuraOdd],
+  ['10_square_twist_31deg.fold', squareTwistOdd],
+  ['11_rabbit_ear_scalene.fold', rabbitEar],
+  ['12_triangle_twist_hexagon.fold', triangleTwist],
 ];
 const only = process.argv[2];
 let failed = 0;
