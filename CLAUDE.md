@@ -23,13 +23,16 @@ npm run test:engine    # full engine test suite (Vitest)
 
 ```
 src/
-  App.tsx                      picks the page from the URL hash (router.ts: #/, #/learn, #/crease-pattern)
+  App.tsx                      picks the page from the URL hash (router.ts: #/, #/learn, #/crease-pattern, #/explore, #/d/<id>, #/u/<handle>, #/create[/<id>], #/signin)
   index.css                    Tailwind import, design tokens (@theme), base styles
   theme.ts                     the same colours for three.js and SVG (keep in sync with index.css)
-  pages/                       LandingPage, LearnPage, CreasePatternPage
+  pages/                       LandingPage, LearnPage, CreasePatternPage, ExplorePage, DesignPage, ProfilePage, SignInPage, CreatePage
+  store/                       the site's data (people, designs, likes, comments, follows) in localStorage; db.ts is the API
   components/
     ui/                        shared kit: Button, IconButton, SegmentedControl, Scrubber, Picker, Switch, Callout, Toast, Tooltip, Thumbnails, Motion (Reveal, FoldInText)
     shell/                     TopBar and Wordmark, used on every page
+    community/                 design cards, thumbnails, avatars, like button, user menu, step player
+    editor/                    the design editor: FoldCanvas (draw a fold), CollapseCanvas (squash/petal on the crease pattern), StepEditor
     prototype/                 DesignViewer3D (Learn mode and the landing hero)
     modern/                    OrigamiModernCanvas (Crease pattern mode: physics, grab, pin)
   designs/                     bundled designs (.json step designs, .fold crease patterns); index.ts is the catalogue
@@ -40,6 +43,10 @@ src/
 origami-fold-engine/tests/     engine tests
 docs/                          ROADMAP.md, ENGINE_AUDIT.md, screenshots
 ```
+
+## Sharing (no backend yet)
+
+Profiles, designs (drafts and published), likes, comments, follows and remixes live in this browser's localStorage, through `src/store/db.ts`. It enforces what a server would (sign in to change anything, only your own designs and comments, drafts private, size limits) and is tested in `origami-fold-engine/tests/store.test.ts`. Pages read it with `useDb((db) => …)` and change it with `db.…` calls only, so a real backend replaces `db.ts` and nothing else. A new browser is seeded (`seed.ts`) with the bundled designs under the "Origami library" account and two made-up sample people. Bundled designs are stored as references (`source: { type: 'bundled' }`), uploads and authored designs inline.
 
 ## The two modes
 

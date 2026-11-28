@@ -1,10 +1,10 @@
 import React, { useCallback, useEffect, useRef, useState } from 'react';
-import { Check, ChevronLeft, ChevronRight, Eye, EyeOff, FileUp, Pause, Play, RotateCcw, LocateFixed } from 'lucide-react';
+import { Check, ChevronLeft, ChevronRight, Eye, EyeOff, FileUp, Pause, Play, RotateCcw, LocateFixed, Share2, Shuffle } from 'lucide-react';
 import { AnimatePresence, motion } from 'motion/react';
 import { compileDesign, DesignAnimator, DesignError, type CompiledDesign } from '../engine/design';
 import { DesignViewer3D } from '../components/prototype/DesignViewer3D';
 import { TopBar } from '../components/shell/TopBar';
-import { Button, IconButton } from '../components/ui/Button';
+import { Button, ButtonLink, IconButton } from '../components/ui/Button';
 import { Callout } from '../components/ui/Callout';
 import { Picker, type PickerItem } from '../components/ui/Picker';
 import { Scrubber } from '../components/ui/Scrubber';
@@ -15,7 +15,8 @@ import { useToast } from '../components/ui/Toast';
 import { cn } from '../components/ui/cn';
 import { STEP_DESIGNS, difficultyLabel } from '../designs';
 import { usePrefersReducedMotion } from '../hooks';
-import { usePageTitle } from '../router';
+import { hashParam, href, navigate, usePageTitle } from '../router';
+import { db, useDb, LIMITS } from '../store';
 import { theme } from '../theme';
 
 interface Loaded {
@@ -100,9 +101,18 @@ export const LearnPage: React.FC = () => {
     }, 16);
   }, []);
 
+  // a design someone shared (#/learn?design=<id>), else the first bundled one
+  const [sharedId, setSharedId] = useState<string | null>(null);
   useEffect(() => {
-    choose(STEP_DESIGNS[0].json, STEP_DESIGNS[0].id);
+    const rec = db.design(hashParam('design'));
+    if (rec && rec.kind === 'steps') {
+      setSharedId(rec.id);
+      choose(db.fileOf(rec), rec.title);
+    } else {
+      choose(STEP_DESIGNS[0].json, STEP_DESIGNS[0].id);
+    }
   }, [choose]);
+  const me = useDb((d) => d.me);
 
   // Playback. With reduced motion, jump a whole step at a time instead of easing through it.
   const last = useRef<number | null>(null);
@@ -230,7 +240,10 @@ export const LearnPage: React.FC = () => {
           fallbackTitle={loaded?.source}
           onChange={(id) => {
             const d = STEP_DESIGNS.find((x) => x.id === id);
-            if (d) choose(d.json, d.id);
+            if (d) {
+              setSharedId(null);
+              choose(d.json, d.id);
+            }
           }}
           footer={
             <button
@@ -248,6 +261,42 @@ export const LearnPage: React.FC = () => {
           </Button>
         </div>
         <input ref={fileInput} type="file" accept=".json,application/json" className="hidden" onChange={onFile} />
+        {sharedId ? (
+          <ButtonLink href={href.design(sharedId)} icon={Share2} className="hidden xl:inline-flex">
+            Design page
+          </ButtonLink>
+        ) : (
+          <Button
+            icon={Shuffle}
+            className="hidden xl:inline-flex"
+            title="Copy this design into your drafts to change it"
+            disabled={!design}
+            onClick={() => {
+              if (!me) return navigate(href.signin(window.location.hash));
+              if (!design) return;
+              try {
+                const copy = JSON.parse(JSON.stringify(design));
+                const rec = db.createDesign({
+                  kind: 'steps',
+                  title: `${design.meta.title}${bundled ? ' (remix)' : ''}`.slice(0, LIMITS.titleLength),
+                  description: design.meta.description?.slice(0, LIMITS.descriptionLength),
+                  credit: design.meta.author,
+                  difficulty: design.meta.difficulty,
+                  tags: (design.meta.tags ?? []).slice(0, LIMITS.tags),
+                  source: { type: 'inline', data: copy },
+                  size: design.steps.length,
+                  front: design.paper.front,
+                  back: design.paper.back,
+                });
+                navigate(href.edit(rec.id));
+              } catch (err) {
+                toast.show({ tone: 'error', title: 'Couldn’t copy the design', detail: (err as Error).message });
+              }
+            }}
+          >
+            Edit a copy
+          </Button>
+        )}
         <div className="hidden sm:block">
           <ShortcutsButton shortcuts={SHORTCUTS} />
         </div>

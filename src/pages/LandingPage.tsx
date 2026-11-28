@@ -13,6 +13,8 @@ import { cn } from '../components/ui/cn';
 import { PATTERNS, STEP_DESIGNS, patternById } from '../designs';
 import { usePrefersReducedMotion } from '../hooks';
 import { ROUTE_HASH, usePageTitle } from '../router';
+import { useDb } from '../store';
+import { DesignCard } from '../components/community/DesignCard';
 import { theme } from '../theme';
 
 const HERO_DESIGN = STEP_DESIGNS[0]; // the paper cup: quick to fold, easy to read
@@ -303,6 +305,39 @@ const StepPreview: React.FC = () => {
   );
 };
 
+/** The newest designs people shared, and the way into Explore and Create. */
+const CommunityStrip: React.FC = () => {
+  const latest = useDb((d) => d.designs({ sort: 'new' }).slice(0, 4));
+  if (!latest.length) return null;
+  return (
+    <section aria-labelledby="community" className="border-t border-line bg-canvas">
+      <div className="mx-auto max-w-6xl px-6 py-24">
+        <Reveal className="flex flex-col gap-4 md:flex-row md:items-end md:justify-between">
+          <div>
+            <h2 id="community" className="font-display text-4xl font-semibold tracking-tight text-ink">
+              Shared by folders
+            </h2>
+            <p className="mt-3 max-w-lg text-lg text-ink-muted">Make a design fold by fold in the editor, share it, and remix what others made.</p>
+          </div>
+          <div className="flex gap-2">
+            <ButtonLink href={ROUTE_HASH.explore}>Explore all</ButtonLink>
+            <ButtonLink href={ROUTE_HASH.create} variant="primary" trailingIcon={ArrowRight}>
+              Make a design
+            </ButtonLink>
+          </div>
+        </Reveal>
+        <ul className="mt-10 grid gap-5 sm:grid-cols-2 lg:grid-cols-4">
+          {latest.map((d, i) => (
+            <Reveal as="li" key={d.id} delay={0.05 * i}>
+              <DesignCard design={d} />
+            </Reveal>
+          ))}
+        </ul>
+      </div>
+    </section>
+  );
+};
+
 const PRINCIPLES = [
   {
     title: 'Exact, not simulated',
@@ -447,6 +482,8 @@ export const LandingPage: React.FC = () => {
             </div>
           </div>
         </section>
+
+        <CommunityStrip />
 
         {/* how it works */}
         <section aria-labelledby="how" className="border-t border-line bg-surface">

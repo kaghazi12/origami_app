@@ -103,6 +103,10 @@ Build these once in `src/components/ui/` and use them in both modes. Don't resty
 
 **Loading**: while a design folds, show "Folding…" with a thin indeterminate progress line at the top of the viewer. Don't use spinners in the middle of the model or `animate-pulse` on text.
 
+**Field / TextArea** (`ui/Field.tsx`): label above, hint or error below, optional character count. **Dialog / ConfirmDialog** (`ui/Dialog.tsx`): every confirmation and small form; never `confirm()`.
+
+**Community pieces** (`components/community/`): `DesignCard` for every grid of designs, `Avatar` (a sheet in the person's colour with a folded corner) and `PersonLink`, `LikeButton`, `StepPlayer` for a compact step design player. Pages read data with `useDb` and change it through `db` only.
+
 **Icons:** use Lucide only, at 16px in controls and 20px in empty states, always `strokeWidth={1.75}`. Never emoji (no 📍, ✋ or ✕ in labels). Use `MapPin`, `Hand` and `X` instead.
 
 ---

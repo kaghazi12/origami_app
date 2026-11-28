@@ -2,7 +2,7 @@
 
 The goal is a social site where people share origami designs and anyone can watch them fold in 3D, step by step, and interact with them.
 
-This file covers what exists today, what's missing, and the order to build the rest in. It describes the `prototype-engine` branch.
+This file covers what exists today, what's missing, and the order to build the rest in. It describes the `frontend` branch.
 
 ## The idea in one paragraph
 
@@ -21,13 +21,13 @@ Both share the exact folder and the layer-order solver. The old "legacy preset v
 
 | Phase | Goal | Status |
 |---|---|---|
-| 0. Trustworthy core | Physics bugs fixed, deterministic, fast enough | **Partly.** Strain blow-up and self-collision fixed. Plasticity overriding fold targets, hinge-angle bookkeeping, and slow collisions remain. |
+| 0. Trustworthy core | Physics bugs fixed, deterministic, fast enough | **Mostly done.** Strain blow-up, self-collision, plasticity overriding fold targets and hinge-angle bookkeeping fixed; impossible patterns stop where they jam. Collisions on big physics folds are still slow (90–200 ms a frame). |
 | 1. File formats | A design format people can share | **Done.** Step-by-step `.json` designs and FOLD `.fold` crease patterns. |
 | 2. Step engine | Exact folding with correct layer order | **Mostly done.** Simple folds, squash, petal, reverse folds, whole-crease-pattern folding. Gaps listed below. |
 | 3. Bake and playback | Fold once, play back smoothly | **Partly.** Playback works in two viewers. Nothing is saved or cached yet. |
-| 4. Authoring tool | Make designs without writing files | **Not started.** The biggest gap. |
+| 4. Authoring tool | Make designs without writing files | **Done (first version).** `#/create`: draw folds on the model, reverse folds, collapses (squash, petal) on the crease pattern, turn over, rotate, unfold, live 3D preview, import/export. No image tracer in the app yet. |
 | 5. Viewer interaction | Rotate, scrub, grab | **Mostly done** in Crease pattern mode. Learn mode has rotate and scrub, but no grab yet. |
-| 6. The site | Upload, feed, accounts, sharing | **Not started.** |
+| 6. The site | Upload, feed, accounts, sharing | **Frontend done, no backend.** Explore, design pages, profiles, likes, comments, follows, remixes, drafts and publishing, all in localStorage (`src/store`). Links only work in the browser that made the design. |
 
 ### Known gaps
 
@@ -35,7 +35,7 @@ Both share the exact folder and the layer-order solver. The old "legacy preset v
 - **Speed:** exactly folding a large pattern (test 3: 1,170 creases, 332 layers) takes about 3 s in Node and noticeably longer in the browser. Almost all of it is the layer-order solver.
 - **Transition frames:** in exact mode the frames between flat and about 85% folded are a computed animation, not real paper. Faces that flip get squashed on the way. 85–100% are real shapes.
 - **Two separate 3D viewers:** Learn and Crease pattern modes each have their own viewer, so camera, colours and grab differ. See step 1.
-- **Built-in "Preliminary Base" sample:** it isn't flat-foldable as written (4 mountain and 4 valley creases at the centre break Maekawa's rule), so it stays on physics.
+- **Built-in "Preliminary Base" sample:** it isn't flat-foldable as written (4 mountain and 4 valley creases at the centre break Maekawa's rule). The exact folder now swaps one crease so it folds, but the result may not be the real preliminary base.
 
 ## Next steps, in order
 
@@ -66,7 +66,8 @@ Make designs in the browser:
 **Done when:** someone can make the paper cup and the preliminary base without touching JSON.
 
 ### 5. Save and share
-- A backend that stores designs.
+The pages, and the rules a server must enforce, exist (`src/store/db.ts`, tested in `store.test.ts`). What's left is the server itself, replacing `db.ts`:
+- A backend that stores designs and accounts (real sign-in).
 - Fold each design once on upload and cache the result.
 - Generate a thumbnail from the final frame.
 - Give each design a shareable link.
@@ -75,7 +76,7 @@ Make designs in the browser:
 **Done when:** a design can be uploaded and opened from a link on another machine.
 
 ### 6. Social features
-Feed, profiles, likes, comments, remix (copy someone's design and edit it). This is standard web work once steps 1–5 exist.
+Feed (Explore, with a Following tab), profiles, likes, comments, follows and remix are built on the browser store. Still to come with the backend: notifications, reporting and moderation, and search across everyone's designs.
 
 ## Architecture (current)
 

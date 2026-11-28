@@ -3,6 +3,7 @@ import {
   ArrowDownToLine,
   ChevronDown,
   FileDown,
+  Share2,
   FileUp,
   FoldVertical,
   Hand,
@@ -24,7 +25,7 @@ import { BarycentricAttachment } from '../engine/physics/types';
 import { isFoldedForm, unfoldFoldedForm } from '../engine/fold/unfold';
 import { prepareFold, type FoldReport } from '../engine/fold/prepare';
 import { TopBar } from '../components/shell/TopBar';
-import { Button, IconButton } from '../components/ui/Button';
+import { Button, ButtonLink, IconButton } from '../components/ui/Button';
 import { Callout } from '../components/ui/Callout';
 import { Picker, type PickerItem } from '../components/ui/Picker';
 import { MiniSlider, Scrubber } from '../components/ui/Scrubber';
@@ -35,7 +36,8 @@ import { CreaseThumbnail } from '../components/ui/Thumbnails';
 import { useToast } from '../components/ui/Toast';
 import { cn } from '../components/ui/cn';
 import { DEFAULT_PATTERN_ID, PATTERNS, patternById } from '../designs';
-import { hashParam, usePageTitle } from '../router';
+import { hashParam, href, navigate, usePageTitle } from '../router';
+import { db, useDb, LIMITS } from '../store';
 
 /** A flat crease pattern for thumbnails; folded forms are unfolded first. */
 function flatPattern(fold: FoldFormat | null): FoldFormat | null {
@@ -210,13 +212,26 @@ export const CreasePatternPage: React.FC = () => {
     const id = hashParam('pattern');
     return id && patternById(id) ? id : DEFAULT_PATTERN_ID;
   });
-  const [selectedSampleId, setSelectedSampleId] = useState<string>(startId);
-  const [initial] = useState(() => prepareFold(patternById(startId)!.create()));
+  // a crease pattern someone shared (#/crease-pattern?design=<id>), opened instead of a sample
+  const [shared] = useState(() => {
+    const rec = db.design(hashParam('design'));
+    if (!rec || rec.kind !== 'pattern') return null;
+    try {
+      return { rec, prepared: prepareFold(db.fileOf(rec)) };
+    } catch {
+      return null;
+    }
+  });
+  const [selectedSampleId, setSelectedSampleId] = useState<string>(shared ? 'custom' : startId);
+  const [initial] = useState(() => shared?.prepared ?? prepareFold(patternById(startId)!.create()));
   const [currentFold, setCurrentFold] = useState<FoldFormat>(initial.fold);
   /** What prepareFold found in the open file: repairs, and what the pattern can't do. */
   const [report, setReport] = useState<FoldReport>(initial.report);
   /** Title and details of what's open: the bundled entry, or the uploaded file's own metadata. */
-  const [fileName, setFileName] = useState<string | null>(null);
+  const [fileName, setFileName] = useState<string | null>(shared?.rec.title ?? null);
+  /** The open pattern is a shared design (its page exists), until another one is opened. */
+  const [sharedId, setSharedId] = useState<string | null>(shared?.rec.id ?? null);
+  const me = useDb((d) => d.me);
   const [folding, setFolding] = useState(true);
   const [dragOver, setDragOver] = useState(false);
   const [devOpen, setDevOpen] = useState(false);
@@ -782,6 +797,7 @@ export const CreasePatternPage: React.FC = () => {
             return;
           }
           setSelectedSampleId('custom');
+          setSharedId(null);
           setFileName(file.name);
           setReport(prepared.report);
           loadFoldModel(prepared.fold);
@@ -815,6 +831,7 @@ export const CreasePatternPage: React.FC = () => {
       return;
     }
     setSelectedSampleId(id);
+    setSharedId(null);
     setFileName(null);
     setReport(prepared.report);
     loadFoldModel(prepared.fold);
@@ -882,6 +899,29 @@ export const CreasePatternPage: React.FC = () => {
           </Button>
         </div>
         <input type="file" ref={fileInputRef} onChange={handleFileUpload} accept=".fold,.json" className="hidden" />
+        {sharedId ? (
+          <ButtonLink href={href.design(sharedId)} icon={Share2} className="hidden xl:inline-flex">
+            Design page
+          </ButtonLink>
+        ) : (
+          <Button
+            icon={Share2}
+            className="hidden xl:inline-flex"
+            title="Save this pattern to your designs and publish it"
+            onClick={() => {
+              if (!me) return navigate(href.signin(window.location.hash));
+              try {
+                const creases = currentFold.edges_assignment.filter((a) => a === 'M' || a === 'V').length;
+                const rec = db.createDesign({ kind: 'pattern', title: title.slice(0, LIMITS.titleLength), credit: entry ? 'Bundled with the app' : undefined, source: { type: 'inline', data: currentFold }, size: creases });
+                navigate(href.edit(rec.id));
+              } catch (err) {
+                toast.show({ tone: 'error', title: 'Couldn’t save the pattern', detail: (err as Error).message });
+              }
+            }}
+          >
+            Share
+          </Button>
+        )}
         <div className="hidden sm:block">
           <ShortcutsButton shortcuts={SHORTCUTS} />
         </div>

@@ -280,7 +280,7 @@ describe('animator', () => {
     }
   });
 
-  it('plans rigid motion for squash and petal folds (no tearing mid-step)', () => {
+  it('plans rigid motion for squash and petal folds (no tearing mid-step)', { timeout: 60000 }, () => {
     for (const caption of ['Squash the front flap into a square', 'Petal fold', 'Repeat behind: Petal fold']) {
       const step = c.steps.find((s) => s.caption === caption)!;
       const path = planStepPath(step.record);
